@@ -48,10 +48,13 @@ app.use("/assets", (req, res, next) => {
     }
     // Bare filename (no images/dxf/video prefix in the URL) — the theme
     // references a handful of assets this way (logo.svg, com.png, de.png,
-    // gb.png, nl.png, ...) even though they physically live under images/
-    // in the B2 bucket. Prefix-less requests always resolve there.
+    // gb.png, nl.png, product photos, mounting-method videos, ...) even
+    // though they physically live in a subfolder of the B2 bucket. Almost
+    // all of them are images/, except pagebuilder <video> tags whose bare
+    // .mp4 src lives under video/ instead.
     if (!fname.includes("/")) {
-      return res.redirect(302, `${CDN_BASE}/images/${fname}`);
+      const prefix = /\.(mp4|webm|mov|m4v)$/i.test(fname) ? "video" : "images";
+      return res.redirect(302, `${CDN_BASE}/${prefix}/${fname}`);
     }
   }
   next();
