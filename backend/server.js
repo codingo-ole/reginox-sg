@@ -42,8 +42,17 @@ app.use("/assets", (req, res, next) => {
     if (fs.existsSync(fullPath)) return res.sendFile(fullPath, { dotfiles: 'allow' });
   }
   const topDir = fname.split("/")[0];
-  if (CDN_PREFIXES.includes(topDir) && CDN_BASE) {
-    return res.redirect(302, `${CDN_BASE}/${fname}`);
+  if (CDN_BASE) {
+    if (CDN_PREFIXES.includes(topDir)) {
+      return res.redirect(302, `${CDN_BASE}/${fname}`);
+    }
+    // Bare filename (no images/dxf/video prefix in the URL) — the theme
+    // references a handful of assets this way (logo.svg, com.png, de.png,
+    // gb.png, nl.png, ...) even though they physically live under images/
+    // in the B2 bucket. Prefix-less requests always resolve there.
+    if (!fname.includes("/")) {
+      return res.redirect(302, `${CDN_BASE}/images/${fname}`);
+    }
   }
   next();
 });
