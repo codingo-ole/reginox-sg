@@ -1683,6 +1683,18 @@ function processHtml(html, pageName) {
     (match, fname) => `href="/assets/dxf/${fname}"`
   );
 
+  // "Download Productsheet" buttons call a live PDF-generation endpoint
+  // (md_productpdf) that has no local equivalent — there's no static file to
+  // mirror since Magento builds the PDF on request. Stash the domain behind a
+  // sentinel so the later catch-all rules (which strip every remaining
+  // reginox.com occurrence, including inside onclick="window.open(...)", not
+  // just href=) don't collapse it into a dead local path. Restored after
+  // those strips run, further down.
+  html = html.replace(
+    /https?:\/\/www\.reginox\.com(\/md_productpdf\/[^'"]+)/g,
+    '\x00REGINOX_LIVE\x00$1'
+  );
+
   // Remaining media URLs (swatches, category banners, gallery JSON not
   // matched above) → /media caching proxy. Plain and JSON-escaped forms.
   html = html.replace(/https?:\/\/www\.reginox\.com\/media\//g, '/media/');
@@ -1763,6 +1775,9 @@ function processHtml(html, pageName) {
   // then plain form) — leaves root-relative paths that resolve locally.
   html = html.replace(/https?:\\\/\\\/www\.reginox\.com/g, '');
   html = html.replace(/https?:\/\/www\.reginox\.com/g, '');
+
+  // Restore the md_productpdf sentinel now that the strips above are done.
+  html = html.replace(/\x00REGINOX_LIVE\x00/g, 'https://www.reginox.com');
 
   // Strip productListToolbarForm widget init — prevents Magento from overriding our pagination
   html = html.replace(/\s+data-mage-init='[^']*productListToolbarForm[^']*'/g, '');
