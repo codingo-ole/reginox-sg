@@ -1,0 +1,33 @@
+node_modules/
+*.log
+
+# Runtime proxy caches — regenerated automatically by hitting reginox.com
+# on first request after each deploy/restart. Safe to exclude from git.
+site_mirror/origin_cache/
+site_mirror/search_cache/
+site_mirror/listing_cache/
+
+.env
+.DS_Store
+
+# Claude Code session/memory state — not app code
+.claude/
+
+# Dead leftovers from early scaffolding — server.js only reads from
+# site_mirror/ (see SITE_DIR/PAGES_DIR/ASSETS_DIR in server.js). Unused.
+/css/
+/js/
+/frontend/
+/pages/
+/index.html
+
+# Stale DB backup, not the live DB
+reginox.db.bak-*
+backend/reginox.db
+
+# Heavy static assets (1.5GB) — hosted on Backblaze B2 instead of git so the
+# repo stays deployable on free hosts. Kept locally for dev; server.js falls
+# back to a B2 signed-URL redirect when these are missing (production).
+site_mirror/assets/images/
+site_mirror/assets/dxf/
+site_mirror/assets/video/
