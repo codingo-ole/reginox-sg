@@ -31,3 +31,4 @@ backend/reginox.db
 site_mirror/assets/images/
 site_mirror/assets/dxf/
 site_mirror/assets/video/
+cf-worker/.wrangler/

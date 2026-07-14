@@ -18,67 +18,22 @@ const db = new Database(DB_PATH, { readonly: true });
 app.use(cors());
 app.use(express.json());
 
-// ── Backblaze B2 asset proxy ────────────────────────────────────────────────
-// images/ (492MB), dxf/ (866MB), video/ (173MB) live in a private B2 bucket
-// instead of git, so the repo stays small enough to deploy on free hosts.
-// Locally (site_mirror/assets/{images,dxf,video} still on disk) nothing
-// changes — the smart asset router below serves from disk as always. In
-// production those folders don't exist (gitignored), so on a miss we ask B2
-// for a short-lived signed download URL and 302-redirect the browser there —
-// file bytes flow B2 → browser directly, never through our server.
-const B2_KEY_ID = process.env.B2_KEY_ID;
-const B2_APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
-const B2_BUCKET_NAME = process.env.B2_BUCKET_NAME;
-const B2_BUCKET_ID = process.env.B2_BUCKET_ID;
-const B2_PREFIXES = ["images", "dxf", "video"];
-
-let b2Auth = null; // { apiUrl, downloadUrl, authorizationToken, expiresAt }
-async function b2Authorize() {
-  if (b2Auth && b2Auth.expiresAt > Date.now()) return b2Auth;
-  const creds = Buffer.from(`${B2_KEY_ID}:${B2_APPLICATION_KEY}`).toString("base64");
-  const r = await fetch("https://api.backblazeb2.com/b2api/v3/b2_authorize_account", {
-    headers: { Authorization: `Basic ${creds}` },
-  });
-  if (!r.ok) throw new Error("B2 authorize failed: " + r.status);
-  const data = await r.json();
-  b2Auth = {
-    apiUrl: data.apiInfo.storageApi.apiUrl,
-    downloadUrl: data.apiInfo.storageApi.downloadUrl,
-    authorizationToken: data.authorizationToken,
-    expiresAt: Date.now() + 23 * 60 * 60 * 1000, // tokens last ~24h
-  };
-  return b2Auth;
-}
-
-// One download-authorization token per top-level prefix (images/dxf/video),
-// cached ~50min (tokens are valid 1h) — avoids a B2 API call on every request.
-const b2DownloadAuthCache = {};
-async function b2GetSignedUrl(fname) {
-  if (!B2_KEY_ID || !B2_BUCKET_ID) return null;
-  const prefix = fname.split("/")[0] + "/";
-  const cached = b2DownloadAuthCache[prefix];
-  let token;
-  if (cached && cached.expiresAt > Date.now()) {
-    token = cached.token;
-  } else {
-    const auth = await b2Authorize();
-    const r = await fetch(`${auth.apiUrl}/b2api/v3/b2_get_download_authorization`, {
-      method: "POST",
-      headers: { Authorization: auth.authorizationToken, "Content-Type": "application/json" },
-      body: JSON.stringify({ bucketId: B2_BUCKET_ID, fileNamePrefix: prefix, validDurationInSeconds: 3600 }),
-    });
-    if (!r.ok) throw new Error("B2 get_download_authorization failed: " + r.status);
-    const data = await r.json();
-    token = data.authorizationToken;
-    b2DownloadAuthCache[prefix] = { token, expiresAt: Date.now() + 50 * 60 * 1000 };
-  }
-  const auth = await b2Authorize();
-  return `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${fname}?Authorization=${token}`;
-}
+// ── Asset CDN proxy ─────────────────────────────────────────────────────────
+// images/ (492MB), dxf/ (866MB), video/ (173MB) live in a private Backblaze B2
+// bucket instead of git, so the repo stays small enough to deploy on free
+// hosts. B2 has no CDN of its own (~1.5-2s per direct download, measured), so
+// a Cloudflare Worker (cf-worker/worker.js) sits in front of it holding the B2
+// credentials as its own secrets, and edge-caches each file after its first
+// fetch — repeat requests from anywhere are served from Cloudflare's edge in
+// well under 300ms. Locally (site_mirror/assets/{images,dxf,video} still on
+// disk) nothing changes — served from disk as always. In production those
+// folders don't exist (gitignored), so on a miss we redirect to the Worker.
+const CDN_BASE = process.env.CDN_BASE_URL; // e.g. https://reginox-assets.codingoole.workers.dev
+const CDN_PREFIXES = ["images", "dxf", "video"];
 
 // ── Smart asset router ─────────────────────────────────────────────────────
 const ASSET_SUBDIRS = ["images", "css", "js", "fonts", "video", "dxf", "other", ""];
-app.use("/assets", async (req, res, next) => {
+app.use("/assets", (req, res, next) => {
   const fname = req.path.replace(/^\//, "");
   for (const sub of ASSET_SUBDIRS) {
     const fullPath = sub
@@ -87,13 +42,8 @@ app.use("/assets", async (req, res, next) => {
     if (fs.existsSync(fullPath)) return res.sendFile(fullPath, { dotfiles: 'allow' });
   }
   const topDir = fname.split("/")[0];
-  if (B2_PREFIXES.includes(topDir)) {
-    try {
-      const url = await b2GetSignedUrl(fname);
-      if (url) return res.redirect(302, url);
-    } catch (e) {
-      console.warn("B2 redirect failed for", fname, e.message);
-    }
+  if (CDN_PREFIXES.includes(topDir) && CDN_BASE) {
+    return res.redirect(302, `${CDN_BASE}/${fname}`);
   }
   next();
 });
