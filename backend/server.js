@@ -34,7 +34,11 @@ const CDN_PREFIXES = ["images", "dxf", "video"];
 // ── Smart asset router ─────────────────────────────────────────────────────
 const ASSET_SUBDIRS = ["images", "css", "js", "fonts", "video", "dxf", "other", ""];
 app.use("/assets", (req, res, next) => {
-  const fname = req.path.replace(/^\//, "");
+  // Collapse duplicate slashes: some original hrefs carry them
+  // (/media//dxf//FILE.jpg), which path.join() forgives locally but B2 does
+  // not — a key with "dxf//FILE" simply doesn't exist there, so the CDN
+  // redirect 404s. Normalize before either lookup.
+  const fname = req.path.replace(/^\//, "").replace(/\/{2,}/g, "/");
   for (const sub of ASSET_SUBDIRS) {
     const fullPath = sub
       ? path.join(ASSETS_DIR, sub, fname)
@@ -84,7 +88,10 @@ app.use("/fonts", (req, res, next) => {
 const ORIGIN_CACHE_DIR = path.join(__dirname, "..", "site_mirror", "origin_cache");
 function originRouter(subdir) {
   return (req, res, next) => {
-    const fname = decodeURIComponent(req.path.replace(/^\//, "").split("?")[0]);
+    // Duplicate slashes collapsed for the same reason as in /assets above:
+    // B2 has no key containing "//", so an un-normalized CDN redirect 404s.
+    const fname = decodeURIComponent(req.path.replace(/^\//, "").split("?")[0])
+      .replace(/\/{2,}/g, "/");
     const localPath = path.resolve(path.join(ORIGIN_CACHE_DIR, subdir, fname));
     if (!localPath.startsWith(path.resolve(ORIGIN_CACHE_DIR))) return res.status(400).end();
     // dotfiles:'allow' — Magento uses /.renditions/ paths; sendFile 404s them by default
