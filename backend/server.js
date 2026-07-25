@@ -69,37 +69,34 @@ app.use("/fonts", (req, res, next) => {
   next();
 });
 
-// ── Origin caching proxy: /static/* and /media/* ──────────────────────────
-// RequireJS baseUrl and remaining media URLs (swatches, gallery JSON) are
-// rewritten to local /static and /media paths. First request fetches from
-// reginox.com and caches to disk; afterwards served locally so the clone
-// keeps working when the origin changes or goes offline.
+// ── Origin-mirrored assets: /static/* and /media/* ────────────────────────
+// RequireJS baseUrl and remaining media URLs (banners, swatches, gallery
+// images) were originally live-proxied from reginox.com with an on-disk
+// cache-after-first-fetch. That relied on a writable disk that PERSISTS
+// between requests — true on Render, but not on serverless hosts (Vercel
+// functions get a fresh, ephemeral filesystem per invocation), so every
+// request would re-fetch from the live site with no caching benefit, and
+// permanently break if reginox.com ever changes or removes the file.
+// All 3,031 referenced files were fetched once and now live permanently in
+// the same private B2 bucket as /assets (under media/ and static/), fronted
+// by the same Cloudflare Worker CDN — this router mirrors the /assets one:
+// local disk in dev, CDN redirect in production. No more live fetching.
 const ORIGIN_CACHE_DIR = path.join(__dirname, "..", "site_mirror", "origin_cache");
-function proxyCached(prefix) {
-  return async (req, res) => {
-    const urlPath = prefix + decodeURIComponent(req.path.split('?')[0]);
-    const cacheFile = path.resolve(path.join(ORIGIN_CACHE_DIR, urlPath));
-    if (!cacheFile.startsWith(path.resolve(ORIGIN_CACHE_DIR))) return res.status(400).end();
-    try {
-      if (fs.existsSync(cacheFile) && fs.statSync(cacheFile).isFile()) {
-        // dotfiles:'allow' — Magento uses /.renditions/ paths; sendFile 404s them by default
-        return res.sendFile(cacheFile, { dotfiles: 'allow' });
-      }
-      const r = await fetch("https://www.reginox.com" + prefix + req.path);
-      if (!r.ok) return res.status(r.status).end();
-      const buf = Buffer.from(await r.arrayBuffer());
-      fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
-      fs.writeFileSync(cacheFile, buf);
-      const ct = r.headers.get("content-type");
-      if (ct) res.setHeader("Content-Type", ct);
-      res.send(buf);
-    } catch (e) {
-      res.status(502).end();
+function originRouter(subdir) {
+  return (req, res, next) => {
+    const fname = decodeURIComponent(req.path.replace(/^\//, "").split("?")[0]);
+    const localPath = path.resolve(path.join(ORIGIN_CACHE_DIR, subdir, fname));
+    if (!localPath.startsWith(path.resolve(ORIGIN_CACHE_DIR))) return res.status(400).end();
+    // dotfiles:'allow' — Magento uses /.renditions/ paths; sendFile 404s them by default
+    if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
+      return res.sendFile(localPath, { dotfiles: "allow" });
     }
+    if (CDN_BASE) return res.redirect(302, `${CDN_BASE}/${subdir}/${fname}`);
+    next();
   };
 }
-app.use("/static", proxyCached("/static"));
-app.use("/media", proxyCached("/media"));
+app.use("/static", originRouter("static"));
+app.use("/media", originRouter("media"));
 
 // ── Complete URL → local page mapping ─────────────────────────────────────
 // URLs keep their ORIGINAL paths (domain stripped) so the clone's URL
