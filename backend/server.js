@@ -290,12 +290,12 @@ const FILTER_SCRIPT = `
       if (pg) document.dispatchEvent(new CustomEvent('rg-goto-page', {detail: pg}));
     }, true);
 
-    // Block Amasty's own link navigation ONLY on pages where the filter
-    // engine runs (sinks/taps/werkbladen). On accessoires/toebehoren the
-    // filter options must NAVIGATE to their mirrored SEO pages, exactly
-    // like the original site.
+    // Block Amasty's own link navigation on every listing page — all of them
+    // now filter and sort in place off the database, so a filter click must
+    // never navigate away.
     var ENGINE_PATHS = ['/product-range/sinks', '/product-range/taps',
-      '/assortiment/werkbladen/rvs', '/assortiment/werkbladen/tap-en-lekbladen'];
+      '/assortiment/werkbladen/rvs', '/assortiment/werkbladen/tap-en-lekbladen',
+      '/assortiment/accessoires', '/assortiment/toebehoren'];
     var p_ = window.location.pathname;
     var engineActive = ENGINE_PATHS.some(function(k){
       return p_ === k || p_.indexOf(k + '/') === 0 || p_.indexOf(k + '?') === 0;
@@ -311,42 +311,9 @@ const FILTER_SCRIPT = `
       });
     }
 
-    // On SEO-navigation listing pages (accessoires/toebehoren, and the combined
-    // /product-range), Amasty's own JS (amShopbyFilterCategory.js) calls
-    // preventDefault on filter links and tries an AJAX filter that has no backend
-    // here — so the click does nothing. Force a real navigation to the filter URL
-    // in the capture phase, BEFORE Amasty's handler runs. This matches the
-    // original, whose Amasty AJAX ends up on the same /cat-… or ?x4=… URL.
-    var SEO_NAV = ['/assortiment/accessoires', '/assortiment/toebehoren'];
-    var isSeoNav = SEO_NAV.some(function(k){
-      return p_ === k || p_.indexOf(k + '/') === 0 || p_.indexOf(k + '?') === 0;
-    }) && !engineActive;
-    if (isSeoNav) {
-      document.addEventListener('click', function(e){
-        var a = e.target.closest('.filter-options-content a[href], form[data-amshopby-filter] a[href]');
-        if (!a) return;
-        var h = a.getAttribute('href');
-        if (h && h !== '#' && h.indexOf('javascript') !== 0) {
-          e.stopImmediatePropagation();
-          window.location.href = h;
-        }
-      }, true);
-
-      // Sort By + direction → navigate with product_list_order / product_list_dir
-      // (the route proxies the original sorted page). Matches original behaviour.
-      function setP(k, v){ var u = new URL(window.location.href); u.searchParams.set(k, v); window.location.href = u.toString(); }
-      document.querySelectorAll('select[data-role="sorter"], select.sorter-options, #sorter').forEach(function(s){
-        s.setAttribute('onchange', '');
-        s.addEventListener('change', function(){ setP('product_list_order', s.value); });
-      });
-      document.querySelectorAll('.sorter-action, [data-role="direction-switcher"]').forEach(function(a){
-        a.addEventListener('click', function(e){
-          e.preventDefault(); e.stopImmediatePropagation();
-          var cur = new URL(window.location.href).searchParams.get('product_list_dir') || 'asc';
-          setP('product_list_dir', cur === 'asc' ? 'desc' : 'asc');
-        }, true);
-      });
-    }
+    // (Accessoires/Toebehoren used to navigate to mirrored SEO filter pages and
+    // let the origin do their sorting. They run the local engine now, so that
+    // navigation path is gone — see ENGINE_PATHS above.)
   });
 })();
 </script>
@@ -398,17 +365,19 @@ const CLIENT_FILTER_SCRIPT = `
 
   function initFilterEngine() {
     var path = window.location.pathname;
-    // Sinks/Taps: full filter engine (DB data complete).
-    // Werkbladen pages: engine enabled for the Length/Depth sliders (their
-    // only filters — query-URL based, can't work via mirrored pages).
-    // Toolbar uses Magento format automatically ("N Items" vs "Items x-y of N").
-    // Accessoires/Toebehoren: NO engine — original navigation to mirrored
-    // SEO filter pages (photos + filters stay server-rendered).
+    // Every listing page runs the engine off the database. Accessoires and
+    // Toebehoren used to navigate to mirrored SEO pages instead, which meant
+    // their sort/filter answers came from the origin rather than our own data
+    // — so a product removed from the database would still show up there.
+    // Their catalog fields (position, colors, subcategory, assortiment,
+    // afvoergat) are now populated, so they run locally like the rest.
     var CAT_MAP = {
       '/product-range/sinks':                      'Sinks',
       '/product-range/taps':                       'Taps',
       '/assortiment/werkbladen/rvs':               'Worktops',
       '/assortiment/werkbladen/tap-en-lekbladen':  'Bar Tops',
+      '/assortiment/accessoires':                  'Accessories',
+      '/assortiment/toebehoren':                   'Attachments',
     };
     var baseCat = null;
     Object.keys(CAT_MAP).forEach(function(k) {
@@ -419,12 +388,30 @@ const CLIENT_FILTER_SCRIPT = `
     if (!baseCat && (path === '/product-range' || path.indexOf('/product-range?') === 0)) baseCat = 'ALL';
     if (!baseCat) return;
 
+    // On Accessoires/Toebehoren the Category filter lists product types
+    // (Colanders, Strainers, …) rather than the Sinks material tree, so
+    // category_ids maps to a different field there. The option labels are
+    // English while the stored slugs are the original Dutch ones, so they
+    // are translated here (pairs taken from each option's own cat-<slug> URL).
+    var SUBCAT_SLUG = {
+      'colanders': 'restenbakjes', 'bottomgrids': 'bodemroosters',
+      'cleaning': 'reinigingsartikelen', 'soap dispensers': 'zeeppompjes',
+      'portable drainer cover': 'afdekplaat', 'drainer': 'afdruipmat',
+      'drainer sets': 'afvoersets', 'pop-up sets': 'pop_up_sets',
+      'overflow': 'overloopplaatjes', 'syphons': 'sifons',
+      'clips': 'klemmen', 'strainers': 'zeefjes', 'standpipe': 'standpijpen',
+    };
+    var isSubcatPage = (baseCat === 'Accessories' || baseCat === 'Attachments');
+
     // Maps data-amshopby-filter attr → { key, type, field }
     // field: the actual property name in the API product object
     var ATTR_MAP = {
-      'category_ids': { key: 'material',    type: 'sink_tree',  field: 'material_categories' },
+      'category_ids': isSubcatPage
+        ? { key: 'subcat',   type: 'subcat',      field: 'subcategory'          }
+        : { key: 'material', type: 'sink_tree',   field: 'material_categories'  },
       'x1':           { key: 'mounting',    type: 'token_match', field: 'mounting_type'       },
-      'x143':         { key: 'assortiment', type: 'attach_mat', field: 'material_categories' },
+      'x143':         { key: 'assortiment', type: 'attach_mat', field: 'assortiment'         },
+      'x142':         { key: 'afvoergat', type: 'exact',       field: 'afvoergat'            },
       'x4':           { key: 'color',     type: 'exact',       field: 'colors'               },
       'x5':           { key: 'shape',     type: 'exact',       field: 'shape'                },
       'x7':           { key: 'overflow',  type: 'exact',       field: 'overflow'             },
@@ -446,6 +433,7 @@ const CLIENT_FILTER_SCRIPT = `
     var activeFilters = {
       material: [], mounting: [], color: [], shape: [],
       overflow: [], cabinet: [], pullout: [], assortiment: [], sale: [],
+      subcat: [], afvoergat: [],
       lenDim: null, wdDim: null, depDim: null,
     };
 
@@ -475,6 +463,10 @@ const CLIENT_FILTER_SCRIPT = `
         var nl = val.toLowerCase();
         return MAT_SLUG[nl] || nl.replace(/\\s+/g,'_');
       }
+      if (cfg.key === 'subcat') {
+        var sl = val.toLowerCase().replace(/\\s+/g,' ').trim();
+        return SUBCAT_SLUG[sl] || sl.replace(/\\s+/g,'_');
+      }
       return val.toLowerCase();
     }
 
@@ -501,8 +493,15 @@ const CLIENT_FILTER_SCRIPT = `
           if (lv === 'sinks') return (p.category||'').toLowerCase() === 'sinks';
           return (p.category||'').toLowerCase() === 'sinks' && getMaterialCats(p).indexOf(norm) !== -1;
         case 'attach_mat':
-          // x143 "Assortiment" = Attachments by material
-          return (p.category||'').toLowerCase() === 'attachments' && getMaterialCats(p).indexOf(norm) !== -1;
+          // x143 "Assortiment" = Attachments by material. Reads the strict
+          // 'assortiment' field, not material_categories — see normalizeProduct.
+          var asr = Array.isArray(p[cfg.field])
+            ? p[cfg.field].map(function(c){ return (c||'').toLowerCase(); })
+            : [];
+          return (p.category||'').toLowerCase() === 'attachments' && asr.indexOf(norm) !== -1;
+        case 'subcat':
+          // category_ids on Accessoires/Toebehoren = product type (subcategory)
+          return (p[cfg.field]||'').toLowerCase() === norm;
         case 'token_match':
           var dbToks = splitTokens(p[cfg.field] || '');
           var filterToks = splitTokens(val);
@@ -518,7 +517,7 @@ const CLIENT_FILTER_SCRIPT = `
 
     // ── Match a product against all active filters ────────────────────────
     function matchesFilters(p) {
-      var arrKeys = ['material','mounting','color','shape','overflow','cabinet','pullout','assortiment','sale'];
+      var arrKeys = ['material','mounting','color','shape','overflow','cabinet','pullout','assortiment','sale','subcat','afvoergat'];
       for (var i = 0; i < arrKeys.length; i++) {
         var key = arrKeys[i];
         var arr = activeFilters[key];
@@ -751,6 +750,7 @@ const CLIENT_FILTER_SCRIPT = `
       material:'Category', mounting:'Mounting method', color:'Color',
       shape:'Shape', overflow:'Overflow', cabinet:'Cabinet size (mm)',
       pullout:'Pull-out system', assortiment:'Assortiment', sale:'Sale',
+      subcat:'Category', afvoergat:'Afvoergat',
       lenDim:'Length', wdDim:'Width', depDim:'Depth (mm)'
     };
     function updateActiveFilterBar() {
@@ -774,7 +774,7 @@ const CLIENT_FILTER_SCRIPT = `
         }
       }
       var chips = [];
-      ['material','mounting','color','shape','overflow','cabinet'].forEach(function(k){
+      ['material','mounting','color','shape','overflow','cabinet','pullout','assortiment','sale','subcat','afvoergat'].forEach(function(k){
         (activeFilters[k]||[]).forEach(function(v){ chips.push({key:k,val:v}); });
       });
       ['lenDim','wdDim','depDim'].forEach(function(k){
@@ -815,7 +815,7 @@ const CLIENT_FILTER_SCRIPT = `
       var ca=document.getElementById('rg-clear-all');
       if (ca) ca.addEventListener('click',function(e){
         e.preventDefault();
-        ['material','mounting','color','shape','overflow','cabinet'].forEach(function(k){activeFilters[k]=[];});
+        ['material','mounting','color','shape','overflow','cabinet','pullout','assortiment','sale','subcat','afvoergat'].forEach(function(k){activeFilters[k]=[];});
         ['lenDim','wdDim','depDim'].forEach(function(k){activeFilters[k]=null;});
         // Reset all sliders to min/max
         document.querySelectorAll('.rg-dual-slider').forEach(function(sl){
@@ -1011,10 +1011,11 @@ const CLIENT_FILTER_SCRIPT = `
         renderGrid();
         saveFilters();
       };
-      // The combined /product-range page has cross-category Color / Hide-Price
-      // ordering that can't be reproduced from per-category color_order — so its
-      // sorter NAVIGATES to ?product_list_order (route proxies the real page).
-      var sortByNav = (baseCat === 'ALL');
+      // Every page — including the combined /product-range — sorts in place off
+      // the database. It used to navigate to ?product_list_order and let the
+      // origin supply the order, because color_order/hideprice_order were only
+      // populated for some categories; they now cover all 439 products.
+      var sortByNav = false;
       function navParam(k, v){ var u = new URL(window.location.href); u.searchParams.set(k, v); window.location.href = u.toString(); }
 
       window._rgSorter = function(sel) {
@@ -1925,34 +1926,23 @@ function serveListingWithPage(baseFile, req, res) {
 //   /productrange (landing) and /product-range (full listing) are DIFFERENT pages
 //   category listings live at the Dutch /assortiment/* URLs like the original
 app.get("/productrange", (req, res) => serveFirst(res, "productrange.html"));
-// ── Listing pages: FULL live-proxy (base + every filter/sort/slider variant) ──
-// These pages are served byte-identical from the original: exact filter UI &
-// options, exact product data, exact order. Offline → mirror fallback.
-app.get("/product-range", async (req, res) => {
-  if (await proxyOriginal(req.originalUrl, res)) return;
-  serveFirst(res, "product-range.html");
-});
+// ── Listing pages ──────────────────────────────────────────────────────────
+// Each serves its mirrored shell (chrome, filter UI, banner); the client
+// engine then fills the grid from the database and handles sort/filter in
+// place. These used to live-proxy the origin for every sort/filter variant,
+// which made their answers reflect the origin's catalog rather than ours.
+app.get("/product-range", (req, res) => serveFirst(res, "product-range.html"));
 app.get("/product-range/sinks", (req, res) => serveListingWithPage("product-range_sinks.html", req, res));
 app.get("/product-range/taps", (req, res) => serveListingWithPage("product-range_taps.html", req, res));
 
-app.get("/assortiment/accessoires", async (req, res) => {
-  if (await proxyOriginal(req.originalUrl, res)) return;
-  if (req.query.x4 && servePage(`assortiment_accessoires_x4-${req.query.x4}.html`, res)) return;
-  serveListingWithPage("assortiment_accessoires.html", req, res);
-});
-app.get("/assortiment/toebehoren", async (req, res) => {
-  if (await proxyOriginal(req.originalUrl, res)) return;
-  if (req.query.x4 && servePage(`assortiment_toebehoren_x4-${req.query.x4}.html`, res)) return;
-  serveListingWithPage("assortiment_toebehoren.html", req, res);
-});
-app.get("/assortiment/werkbladen/rvs", async (req, res) => {
-  if (await proxyOriginal(req.originalUrl, res)) return;
-  serveFirst(res, "assortiment_werkbladen_rvs.html", "assortiment_werkbladen.html");
-});
-app.get("/assortiment/werkbladen/tap-en-lekbladen", async (req, res) => {
-  if (await proxyOriginal(req.originalUrl, res)) return;
-  serveFirst(res, "assortiment_werkbladen_tap-en-lekbladen.html", "assortiment_werkbladen.html");
-});
+app.get("/assortiment/accessoires", (req, res) =>
+  serveListingWithPage("assortiment_accessoires.html", req, res));
+app.get("/assortiment/toebehoren", (req, res) =>
+  serveListingWithPage("assortiment_toebehoren.html", req, res));
+app.get("/assortiment/werkbladen/rvs", (req, res) =>
+  serveFirst(res, "assortiment_werkbladen_rvs.html", "assortiment_werkbladen.html"));
+app.get("/assortiment/werkbladen/tap-en-lekbladen", (req, res) =>
+  serveFirst(res, "assortiment_werkbladen_tap-en-lekbladen.html", "assortiment_werkbladen.html"));
 
 // English aliases → original Dutch URLs
 app.get("/product-range/accessories", (req, res) => res.redirect(301, "/assortiment/accessoires"));
@@ -2019,11 +2009,9 @@ async function serveProductOrFilter(cat, slug, req, res, page) {
     if (p?.local_page && servePage(p.local_page, res)) return;
   }
 
-  // 2. Otherwise it's a FILTER (or pagination) → PROXY the original for
-  //    byte-identical filtered results (options, data, order).
-  if (await proxyOriginal(req.originalUrl, res)) return;
-
-  // 3. Offline fallback: mirrored filter page patterns, then the listing.
+  // 2. Otherwise it's a FILTER (or pagination) URL → serve the mirrored page
+  //    for that filter. Its grid is re-rendered from the database by the
+  //    client engine, so it reflects our catalog, not the origin's.
   const pSuffix = page && page > 1 ? `_p${page}` : '';
   const candidates = [
     `${prefix}${slug}${pSuffix}.html`,
@@ -2051,9 +2039,7 @@ app.get("/product-range/:slug", async (req, res) => {
   // Product? serve local detail page.
   const p = db.prepare("SELECT local_page FROM products WHERE page_url LIKE ?").get(`%/${slug}`);
   if (p?.local_page && servePage(p.local_page, res)) return;
-  // Otherwise a FILTER on /product-range → proxy the original.
-  if (await proxyOriginal(req.originalUrl, res)) return;
-  // Offline fallback.
+  // Otherwise a FILTER on /product-range → mirrored shell, grid from the DB.
   for (const cfg of Object.values(CAT_CONFIG)) {
     if (servePage(`${cfg.prefix}${slug}.html`, res)) return;
   }
@@ -2098,68 +2084,18 @@ app.get("/all-blogs", (req, res) => res.redirect(301, "/about-reginox/all-blogs"
 app.get("/customer/account", (req, res) => res.redirect("/"));
 app.get("/customer/account/login", (req, res) => res.redirect("/"));
 app.get("/checkout/cart", (req, res) => res.redirect("/"));
-// Search results — LIVE PROXY of the original search page, cached per query.
-// This is the only way to get 100%-identical results: exact product order
-// (Magento relevance), exact dynamic filter set, exact term highlighting, and
-// exact counts. The page is fetched once from reginox.com, cached to disk, then
-// localized (URLs/images/assets → local) by processHtml and served.
-const SEARCH_CACHE_DIR = path.join(__dirname, "..", "site_mirror", "search_cache");
+// (proxyOriginal lived here: a live fetch of the origin page, cached to disk
+// per path+query, used for search results and every listing sort/filter
+// variant. Removed — those pages are rendered from the database now, so
+// nothing about the running site depends on reginox.com being reachable.)
 
-// General live-proxy for any original page (cached by full path+query, localized).
-// Used for sort/filter variants of the SEO-navigation listing pages so their
-// order/UI is byte-identical to the original. Returns true on success.
-const LISTING_CACHE_DIR = path.join(__dirname, "..", "site_mirror", "listing_cache");
-async function proxyOriginal(originalPathWithQuery, res) {
-  const cacheFile = path.join(LISTING_CACHE_DIR, Buffer.from(originalPathWithQuery).toString("base64").replace(/[/+=]/g, "_") + ".html");
-  try {
-    let raw;
-    if (fs.existsSync(cacheFile)) {
-      raw = fs.readFileSync(cacheFile, "utf8");
-    } else {
-      const r = await fetch("https://www.reginox.com" + originalPathWithQuery, {
-        headers: { "User-Agent": "Mozilla/5.0", "Accept": "text/html" }
-      });
-      if (!r.ok) throw new Error("origin " + r.status);
-      raw = await r.text();
-      fs.mkdirSync(LISTING_CACHE_DIR, { recursive: true });
-      fs.writeFileSync(cacheFile, raw);
-    }
-    const html = processHtml(raw, "listing_live.html");
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache");
-    res.send(html);
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-app.get(["/catalogsearch/result", "/catalogsearch/result/"], async (req, res) => {
-  const qs = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
-  const cacheFile = path.join(SEARCH_CACHE_DIR, Buffer.from(qs || "empty").toString("base64").replace(/[/+=]/g, "_") + ".html");
-  try {
-    let raw;
-    if (fs.existsSync(cacheFile)) {
-      raw = fs.readFileSync(cacheFile, "utf8");
-    } else {
-      const r = await fetch("https://www.reginox.com/catalogsearch/result/" + qs, {
-        headers: { "User-Agent": "Mozilla/5.0", "Accept": "text/html" }
-      });
-      if (!r.ok) throw new Error("origin " + r.status);
-      raw = await r.text();
-      fs.mkdirSync(SEARCH_CACHE_DIR, { recursive: true });
-      fs.writeFileSync(cacheFile, raw);
-    }
-    // pageName 'catalogsearch_live' → processHtml localizes but does NOT inject
-    // the grid-rebuilding SEARCH_SCRIPT (the live page already has the grid).
-    const html = processHtml(raw, "catalogsearch_live.html");
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache");
-    res.send(html);
-  } catch (e) {
-    // offline / origin error → fall back to the reconstructed page
-    serveFirst(res, "catalogsearch_result.html");
-  }
+// Search results: the mirrored shell, with SEARCH_SCRIPT rebuilding the grid
+// from /api/search. This used to live-proxy the origin's result page per
+// query. Free-text queries are unbounded, so unlike the listing pages they
+// could never be mirrored up front — and a proxied result reflects the
+// origin's catalog, so a product removed here would still have shown up.
+app.get(["/catalogsearch/result", "/catalogsearch/result/"], (req, res) => {
+  serveFirst(res, "catalogsearch_result.html");
 });
 app.get("/installation", (req, res) => servePage("installation.html", res) || res.redirect("/service"));
 app.get("/accessoireshop", (req, res) => res.redirect("/product-range/accessories"));
@@ -2323,23 +2259,24 @@ app.get(["/search/ajax/suggest", "/search/ajax/suggest/"], (req, res) => {
   res.json(rows.map(r => ({ title: r.name, num_results: 1 })));
 });
 
-// Mirasvit autocomplete — LIVE PROXY so the header search dropdown is byte-identical
-// to the original (rich results, term highlighting, categories). Not cached (query
-// varies constantly); JSON is small. Images/links inside are rewritten to local.
-app.get(["/searchautocomplete/ajax/suggest", "/searchautocomplete/ajax/suggest/"], async (req, res) => {
-  try {
-    const qs = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
-    const r = await fetch("https://www.reginox.com/searchautocomplete/ajax/suggest/" + qs, {
-      headers: { "User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest", "Accept": "application/json, text/javascript, */*" }
-    });
-    let body = await r.text();
-    // Localize any reginox.com URLs embedded in the JSON/HTML payload
-    body = body.replace(/https?:\\?\/\\?\/www\.reginox\.com/g, "");
-    res.setHeader("Content-Type", r.headers.get("content-type") || "application/json");
-    res.send(body);
-  } catch (e) {
-    res.json({});
-  }
+// Mirasvit autocomplete endpoint. The header dropdown is drawn by
+// SEARCH_UI_SCRIPT off /api/search, so this only catches theme JS that calls
+// the Mirasvit URL directly — answered from the database rather than the
+// origin, which it used to proxy on every keystroke.
+app.get(["/searchautocomplete/ajax/suggest", "/searchautocomplete/ajax/suggest/"], (req, res) => {
+  const q = (req.query.q || "").toString().trim().toLowerCase();
+  if (!q) return res.json({ indices: [] });
+  const rows = db.prepare(
+    "SELECT * FROM products WHERE name != '' AND (LOWER(name) LIKE ? OR LOWER(model_code) LIKE ?) LIMIT 8"
+  ).all(`%${q}%`, `%${q}%`).map(normalizeProduct);
+  res.json({
+    indices: [{
+      identifier: "magento_catalog_product",
+      title: "Products",
+      items: rows.map(p => ({ name: p.name, url: p.href, image: p.image })),
+      totalItems: rows.length,
+    }],
+  });
 });
 
 app.get("/api/stats", (req, res) => {
@@ -2366,6 +2303,12 @@ function normalizeProduct(p) {
     colors: p.colors || "", material: p.material || "",
     material_category: p.material_category || "",
     material_categories: p.material_categories ? JSON.parse(p.material_categories) : [p.material_category || ""].filter(Boolean),
+    // Strict view of the same column, without the material_category fallback
+    // above: the x143 "Assortiment" filter is its own upstream attribute, and
+    // three attachments carry material_category 'pvd' without appearing under
+    // its PVD option — the fallback would over-match them.
+    assortiment: p.material_categories ? JSON.parse(p.material_categories) : [],
+    afvoergat: p.afvoergat || "",
     mounting_type: p.mounting_type || "",
     cabinet_width: p.cabinet_width || null,
     shape: p.shape || "",
@@ -2420,7 +2363,6 @@ app.get(/.*/, async (req, res) => {
     } catch (e) {}
   }
 
-  if (await proxyOriginal(req.originalUrl, res)) return;
   serve404(res);
 });
 
