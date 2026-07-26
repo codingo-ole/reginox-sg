@@ -689,7 +689,10 @@ const CLIENT_FILTER_SCRIPT = `
         arr.sort(function(a,b){ return rank(a,'hideprice_order') - rank(b,'hideprice_order') || byName(a,b); });
       else
         arr.sort(function(a,b){ return rank(a,'position') - rank(b,'position') || byName(a,b); });
-      if (currentDir === 'desc') arr.reverse();
+      // Color ignores the direction toggle upstream — asc and desc return the
+      // same order there — so reversing it is what made that combination
+      // disagree with the origin completely.
+      if (currentDir === 'desc' && currentSort !== 'color') arr.reverse();
       return arr;
     }
 
