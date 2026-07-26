@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
+const zlib = require("zlib");
 const Database = require("better-sqlite3");
 
 const app = express();
@@ -1994,10 +1995,26 @@ function processHtml(html, pageName) {
   return html;
 }
 
+// Pages are stored gzipped (they compress about 8x, and the whole folder has
+// to fit inside a serverless function bundle). Plain .html is still read if
+// present, so a file can be dropped in uncompressed while working on it.
+function readPage(pageName) {
+  const p = path.join(PAGES_DIR, pageName);
+  if (fs.existsSync(p)) return fs.readFileSync(p, "utf8");
+  const gz = p + ".gz";
+  if (fs.existsSync(gz)) return zlib.gunzipSync(fs.readFileSync(gz)).toString("utf8");
+  return null;
+}
+
+// Directory listings report the .html name whatever the file on disk is
+// called, so callers can keep matching on .html.
+function listPages() {
+  return fs.readdirSync(PAGES_DIR).map(f => (f.endsWith(".gz") ? f.slice(0, -3) : f));
+}
+
 function servePage(pageName, res) {
-  const pagePath = path.join(PAGES_DIR, pageName);
-  if (!fs.existsSync(pagePath)) return false;
-  const raw = fs.readFileSync(pagePath, "utf8");
+  const raw = readPage(pageName);
+  if (raw === null) return false;
   const html = processHtml(raw, pageName);
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
@@ -2043,7 +2060,7 @@ function slugCandidates(urlPath, ...extras) {
 
 // Scan all pages directory and find best match for a slug
 function findPageBySlug(slug) {
-  const allPages = fs.readdirSync(PAGES_DIR);
+  const allPages = listPages();
   const normalSlug = slug.replace(/-/g, '_').toLowerCase();
   // Exact suffix match first
   const exact = allPages.find(f => f.toLowerCase().endsWith('_' + normalSlug + '.html') || f.toLowerCase() === normalSlug + '.html');
@@ -2266,7 +2283,7 @@ app.get("/disclaimer-privacy-com", (req, res) => res.redirect("/"));
 
 // Catalog product view (Magento direct URL)
 app.get("/catalog/product/view/id/:id", (req, res) => {
-  const allPages = fs.readdirSync(PAGES_DIR);
+  const allPages = listPages();
   const match = allPages.find(f => f.includes(`_id_${req.params.id}_`));
   if (match) return servePage(match, res);
   res.redirect("/product-range");
@@ -2583,9 +2600,15 @@ app.get(/.*/, async (req, res) => {
   serve404(res);
 });
 
-app.listen(PORT, () => {
-  console.log(`\nReginox server → http://localhost:${PORT}`);
-  console.log(`  Homepage:  http://localhost:${PORT}/`);
-  console.log(`  Sinks:     http://localhost:${PORT}/product-range/sinks`);
-  console.log(`  API:       http://localhost:${PORT}/api/stats`);
-});
+// Only bind a port when started directly (Render, local dev). On Vercel the
+// app is imported by api/index.js and driven per-request, with no listener.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`\nReginox server → http://localhost:${PORT}`);
+    console.log(`  Homepage:  http://localhost:${PORT}/`);
+    console.log(`  Sinks:     http://localhost:${PORT}/product-range/sinks`);
+    console.log(`  API:       http://localhost:${PORT}/api/stats`);
+  });
+}
+
+module.exports = app;
