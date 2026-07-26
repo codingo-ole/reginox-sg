@@ -73,6 +73,27 @@ app.use("/fonts", (req, res, next) => {
   next();
 });
 
+// Some theme JS builds root-relative image paths (/images/loader-1.gif) that
+// really live under the versioned static theme dir. The origin 404s these too,
+// so this is cosmetic — it just spares the browser a failed request. Resolved
+// against whichever mirrored static version actually has the file.
+app.use("/images", (req, res, next) => {
+  const fname = req.path.replace(/^\//, "").split("?")[0];
+  if (!fname || fname.includes("..")) return next();
+  const staticRoot = path.join(ORIGIN_CACHE_DIR, "static");
+  if (!fs.existsSync(staticRoot)) return next();
+  for (const ver of fs.readdirSync(staticRoot)) {
+    const p = path.join(staticRoot, ver, "frontend/Nubix/dawn/en_US/images", fname);
+    if (fs.existsSync(p)) return res.sendFile(p);
+  }
+  next();
+});
+
+// Instagram widget feed requested by Magento_Theme/js/theme.js. The origin
+// answers with an empty array — the widget has no images — so mirror that
+// rather than leaving the request to 404.
+app.get("/nbxtheme/instagram/images", (req, res) => res.json([]));
+
 // ── Origin-mirrored assets: /static/* and /media/* ────────────────────────
 // RequireJS baseUrl and remaining media URLs (banners, swatches, gallery
 // images) were originally live-proxied from reginox.com with an on-disk
@@ -1575,6 +1596,13 @@ const LISTING_LIVE_SCRIPT = `
 // Keeps the search submit button enabled and adds a live autocomplete dropdown
 // backed by /api/search, matching the original quickSearch behaviour.
 const SEARCH_UI_SCRIPT = `
+<style>
+/* The theme styles the suggestion box only as something to hide, so the
+   dropdown built below needs its own look. */
+#search_autocomplete .rg-sugg-list{list-style:none;margin:0;padding:4px 0;background:#fff;border:1px solid #d1d1d1;box-shadow:0 2px 6px rgba(0,0,0,.12);max-height:340px;overflow-y:auto}
+#search_autocomplete .rg-sugg{padding:8px 14px;cursor:pointer;font-size:14px;line-height:1.3;color:#383435;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#search_autocomplete .rg-sugg:hover,#search_autocomplete .rg-sugg.rg-active{background:#f0f0f0}
+</style>
 <script>
 (function(){
   document.addEventListener('DOMContentLoaded', function(){
@@ -1603,8 +1631,14 @@ const SEARCH_UI_SCRIPT = `
     }
     function render(){
       if (!box) return;
-      if (!items.length){ box.innerHTML=''; box.style.display='none'; return; }
-      box.style.display='block';
+      if (!items.length){ box.innerHTML=''; box.style.setProperty('display','none','important'); return; }
+      // The theme kills #search_autocomplete outright — display, height and
+      // overflow all !important — because the original draws its suggestions
+      // in Mirasvit's own element instead. Inline !important is what it takes
+      // to win those three back for the dropdown we build here.
+      box.style.setProperty('display','block','important');
+      box.style.setProperty('height','auto','important');
+      box.style.setProperty('overflow','visible','important');
       box.innerHTML = '<ul role="listbox" class="rg-sugg-list">' + items.map(function(p,i){
         return '<li class="rg-sugg' + (i===sel?' rg-active':'') + '" data-href="' + esc(p.href||'#') + '" role="option">' + hl(p.name, lastQ) + '</li>';
       }).join('') + '</ul>';
