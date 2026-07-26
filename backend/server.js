@@ -2048,10 +2048,36 @@ function isDeletedSlug(slug) {
   } catch (e) { return false; }
 }
 
+
+// Links to the soft-deleted Worktops / Bar Tops ranges. Hidden with CSS
+// rather than cut out of the markup: they sit in menus, in Pagebuilder
+// buttons and in body copy, and :has() removes the surrounding list item
+// too so no empty menu slot is left behind. Undoing the soft delete only
+// needs this block dropped.
+const HIDDEN_LINK_STYLE = `
+<style>
+a[href="/assortiment/werkbladen/rvs"],
+a[href="/assortiment/werkbladen/tap-en-lekbladen"],
+a[href="/inspiration/stainless-steel-worktops"],
+a[href="/stainless-steel-worktops"],
+li:has(> a[href="/assortiment/werkbladen/rvs"]),
+li:has(> a[href="/assortiment/werkbladen/tap-en-lekbladen"]),
+li:has(> a[href="/inspiration/stainless-steel-worktops"]),
+li:has(> a[href="/stainless-steel-worktops"]){display:none !important}
+</style>
+`;
+
 function servePage(pageName, res) {
   const raw = readPage(pageName);
   if (raw === null) return false;
-  const html = processHtml(raw, pageName);
+  let html = processHtml(raw, pageName);
+  // Appended at the closing </body>, not </head>: an earlier literal "</head>"
+  // inside an inline script swallowed the block there, so the rules shipped in
+  // the markup but never became a live stylesheet.
+  const bodyEnd = html.lastIndexOf('</body>');
+  html = bodyEnd === -1
+    ? html + HIDDEN_LINK_STYLE
+    : html.slice(0, bodyEnd) + HIDDEN_LINK_STYLE + html.slice(bodyEnd);
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.send(html);
@@ -2133,6 +2159,15 @@ function serveListingWithPage(baseFile, req, res) {
 // URL structure mirrors the original site exactly:
 //   /productrange (landing) and /product-range (full listing) are DIFFERENT pages
 //   category listings live at the Dutch /assortiment/* URLs like the original
+// Ranges removed by the soft delete: their listings and the inspiration page
+// that showcases them. 404 rather than an empty grid.
+app.get([
+  "/assortiment/werkbladen/rvs",
+  "/assortiment/werkbladen/tap-en-lekbladen",
+  "/inspiration/stainless-steel-worktops",
+  "/stainless-steel-worktops",
+], (req, res) => serve404(res));
+
 app.get("/productrange", (req, res) => serveFirst(res, "productrange.html"));
 // ── Listing pages ──────────────────────────────────────────────────────────
 // Each serves its mirrored shell (chrome, filter UI, banner); the client
