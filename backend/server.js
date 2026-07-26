@@ -1965,6 +1965,39 @@ function processHtml(html, pageName) {
   // Restore the md_productpdf sentinel now that the strips above are done.
   html = html.replace(/\x00REGINOX_LIVE\x00/g, 'https://www.reginox.com');
 
+  // ── Rebranding for the Singapore entity ──────────────────────────────────
+  // Applied at serve time rather than edited into 1,477 mirrored pages.
+
+  // Footer company block: the Dutch head office becomes the local entity.
+  html = html.replace(
+    /Reginox bv<br>\s*Noordermorssingel 2<br>[\s\S]*?<a[^>]*href="mailto:info@reginox\.com"[^>]*>info@reginox\.com<\/a>/g,
+    'Reginox Far East Pte Ltd<br>2 Loyang Lane #03-03<br>Singapore 508913<br>' +
+    'T: +65 6788 5363<br><a tabindex="0" href="mailto:info@reginox.com.sg">info@reginox.com.sg</a>'
+  );
+
+  // Site name in the browser tab.
+  html = html.replace(/Reginox International/g, 'Reginox Asia Pacific');
+
+  // Region switcher flag. The theme's flags are PNGs under /assets; there is
+  // no Singapore one to point at, so the current-region icon becomes the flag
+  // emoji, which every current platform renders.
+  html = html.replace(
+    /<img[^>]*src="\/assets\/com\.png"[^>]*>/g,
+    '<span class="rg-flag" style="font-size:20px;line-height:1;vertical-align:middle">\u{1F1F8}\u{1F1EC}</span>'
+  );
+
+  // Contact page "Our offices": the local entity leads and the Dutch head
+  // office follows, and the separate Dutch PO-box block is dropped.
+  html = html.replace(/<p><strong>Post<\/strong>[\s\S]*?<\/p>/g, '');
+  const blokKantor = nama => new RegExp(
+    '<p><strong><span style="color: #a01028;">' + nama + '<\\/span><\\/strong>[\\s\\S]*?<\\/p>'
+  );
+  const mBv = html.match(blokKantor('Reginox bv'));
+  const mFe = html.match(blokKantor('Reginox Far East Pte Ltd'));
+  if (mBv && mFe) {
+    html = html.replace(mBv[0], '\x00KANTOR\x00').replace(mFe[0], mBv[0]).replace('\x00KANTOR\x00', mFe[0]);
+  }
+
   // Strip productListToolbarForm widget init — prevents Magento from overriding our pagination
   html = html.replace(/\s+data-mage-init='[^']*productListToolbarForm[^']*'/g, '');
 
