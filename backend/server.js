@@ -1608,23 +1608,31 @@ const LISTING_LIVE_SCRIPT = `
 // backed by /api/search, matching the original quickSearch behaviour.
 const SEARCH_UI_SCRIPT = `
 <style>
-/* Suggestion dropdown. Sits where the original's does — directly under the
-   input inside .control — and mirrors its layout: a white panel with a
-   section heading, then a thumbnail-and-name row per product. */
+/* Suggestion dropdown. These values are the theme's own — taken from its
+   .mst-searchautocomplete__* rules — because the markup cannot carry those
+   class names: Mirasvit's script blanks any element wearing them. Same blue
+   top rule, same uppercase section headings, 80px thumbnails, blue bold
+   match highlight, and the "view all" bar pinned to the bottom. */
 .block-search .control{position:relative}
-/* Anchored to the input's RIGHT edge so it grows leftward: the search sits at
-   the far right of the header, and anchoring left pushed a 320px-wide panel
-   past the viewport edge (measured 1627px against a 1440px window). */
-.rg-ac{display:none;position:absolute;top:100%;right:0;left:auto;width:320px;max-width:90vw;background:#fff;border:1px solid #e0e0e0;box-shadow:0 4px 12px rgba(0,0,0,.15);z-index:1000;text-align:left}
+/* Anchored right so it grows leftward: the search sits at the far right of
+   the header, and anchoring left ran the panel past the viewport edge. */
+.rg-ac{display:none;position:absolute;top:100%;right:0;left:auto;width:100%;min-width:320px;max-width:92vw;box-sizing:border-box;background:#fff;border-top:2px solid #1ba1fc;border-radius:3px;box-shadow:0 3px 10px rgba(0,0,0,.16);z-index:1000;text-align:left;overflow:hidden}
 .rg-ac._active{display:block}
-.rg-ac-title{padding:10px 14px;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#8a8a8a;border-bottom:1px solid #ececec}
-.rg-ac-list{list-style:none;margin:0;padding:0;max-height:380px;overflow-y:auto}
-.rg-ac-item{display:flex;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;border-bottom:1px solid #f4f4f4}
-.rg-ac-item:last-child{border-bottom:0}
-.rg-ac-item:hover,.rg-ac-item._active{background:#f6f6f6}
-.rg-ac-thumb{flex:0 0 48px;width:48px;height:48px;object-fit:contain;background:#fff}
-.rg-ac-name{font-size:14px;line-height:1.35;color:#383435;overflow:hidden}
-.rg-ac-name .rg-hl{background:#ff0;color:inherit}
+.rg-ac-close{position:absolute;right:6px;top:0;padding:10px;font-weight:bold;font-size:1.6rem;line-height:1rem;color:#999;cursor:pointer}
+.rg-ac-scroll{max-height:70vh;overflow-y:auto;padding-bottom:40px}
+.rg-ac-title{border-bottom:1px solid #efefef;margin:0 10px;padding:10px 0 9px;font-size:1.2rem;line-height:1.2rem;font-weight:700;color:#777;text-transform:uppercase}
+.rg-ac ul{list-style:none;margin:0;padding:0}
+.rg-ac-item{display:flex;align-items:center;padding:10px;cursor:pointer;border-bottom:1px solid #f6f6f6}
+.rg-ac-item:last-child{border-bottom:none}
+.rg-ac-item:hover,.rg-ac-item._active{background:#f8f8f8}
+.rg-ac-imgwrap{flex:0 0 8rem;height:8rem;width:8rem;margin-right:1rem}
+.rg-ac-imgwrap img{height:8rem;max-width:8rem;display:block;margin:auto;object-fit:contain}
+.rg-ac-meta{flex-grow:1;overflow:hidden}
+.rg-ac-name{display:block;color:#333;font-weight:500;word-break:break-word}
+.rg-ac-page .rg-ac-name{font-size:1.4rem}
+.rg-hl{font-weight:600;color:#1ba1fc}
+.rg-ac-all{border-top:1px solid #efefef;position:absolute;left:0;bottom:0;width:100%;height:40px;text-align:center;background:#fff}
+.rg-ac-all a{display:block;padding:10px 0;font-size:1.2rem;font-weight:600;color:#777;text-decoration:none}
 </style>
 <script>
 (function(){
@@ -1660,7 +1668,7 @@ const SEARCH_UI_SCRIPT = `
       else control.appendChild(b);
       return b;
     }
-    var timer, items = [], sel = -1, lastQ = '';
+    var timer, items = [], pages = [], sel = -1, lastQ = '';
     function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     // Wrap the matched query in the highlight span the theme styles.
     function hl(name, q){
@@ -1674,35 +1682,61 @@ const SEARCH_UI_SCRIPT = `
     function render(){
       var box = getBox();
       if (!box) return;
-      if (!items.length){ box.innerHTML=''; box.classList.remove('_active'); return; }
+      if (!items.length && !pages.length){ box.innerHTML=''; box.classList.remove('_active'); return; }
       box.classList.add('_active');
-      var lis = items.map(function(p,i){
-        // Not loading="lazy": the panel is created hidden and revealed in the
-        // same frame, which leaves lazy thumbnails sitting at naturalWidth 0.
-        // At most a handful of small images, so there is nothing to defer.
-        var thumb = p.image
-          ? '<img class="rg-ac-thumb" src="' + esc(p.image) + '" alt="">'
-          : '<span class="rg-ac-thumb"></span>';
-        return '<li class="rg-ac-item' + (i===sel ? ' _active' : '') +
-          '" data-href="' + esc(p.href||'#') + '" role="option">' +
-          thumb + '<span class="rg-ac-name">' + hl(p.name, lastQ) + '</span></li>';
-      }).join('');
-      box.innerHTML =
-        '<div class="rg-ac-title">Products (' + items.length + ')</div>' +
-        '<ul class="rg-ac-list" role="listbox">' + lis + '</ul>';
+
+      var html = '<span class="rg-ac-close">&times;</span><div class="rg-ac-scroll">';
+
+      if (items.length) {
+        html += '<div class="rg-ac-title">Products (' + items.length + ')</div><ul role="listbox">' +
+          items.map(function(p,i){
+            // Not loading="lazy": the panel is created hidden and revealed in
+            // the same frame, which leaves lazy thumbnails at naturalWidth 0.
+            var thumb = p.image
+              ? '<span class="rg-ac-imgwrap"><img src="' + esc(p.image) + '" alt=""></span>'
+              : '<span class="rg-ac-imgwrap"></span>';
+            return '<li class="rg-ac-item' + (i===sel ? ' _active' : '') +
+              '" data-href="' + esc(p.href||'#') + '" role="option">' + thumb +
+              '<span class="rg-ac-meta"><span class="rg-ac-name">' + hl(p.name, lastQ) +
+              '</span></span></li>';
+          }).join('') + '</ul>';
+      }
+
+      if (pages.length) {
+        html += '<div class="rg-ac-title">Information (' + pages.length + ')</div><ul>' +
+          pages.map(function(pg){
+            return '<li class="rg-ac-item rg-ac-page" data-href="' + esc(pg.href||'#') + '">' +
+              '<span class="rg-ac-meta"><span class="rg-ac-name">' + hl(pg.title, lastQ) +
+              '</span></span></li>';
+          }).join('') + '</ul>';
+      }
+
+      html += '</div><div class="rg-ac-all"><a href="/catalogsearch/result/?q=' +
+        encodeURIComponent(lastQ) + '">View all ' + (items.length + pages.length) +
+        ' results \\u2192</a></div>';
+
+      box.innerHTML = html;
       box.querySelectorAll('.rg-ac-item').forEach(function(li){
         li.addEventListener('mousedown', function(e){ e.preventDefault(); window.location.href = li.getAttribute('data-href'); });
+      });
+      var x = box.querySelector('.rg-ac-close');
+      if (x) x.addEventListener('mousedown', function(e){
+        e.preventDefault(); items=[]; pages=[]; sel=-1; render();
       });
     }
     input.addEventListener('input', function(){
       clearTimeout(timer);
       var q = input.value.trim();
-      if (q.length < 2){ items=[]; sel=-1; render(); return; }
+      if (q.length < 2){ items=[]; pages=[]; sel=-1; render(); return; }
       timer = setTimeout(function(){
         lastQ = q;
-        fetch('/api/search?q=' + encodeURIComponent(q))
+        fetch('/api/autocomplete?q=' + encodeURIComponent(q))
           .then(function(r){ return r.json(); })
-          .then(function(list){ items = (Array.isArray(list)?list:[]).slice(0,8); sel=-1; render(); })
+          .then(function(d){
+            items = (d && Array.isArray(d.products) ? d.products : []).slice(0,8);
+            pages = (d && Array.isArray(d.pages) ? d.pages : []).slice(0,4);
+            sel=-1; render();
+          })
           .catch(function(){});
       }, 180);
     });
@@ -2367,6 +2401,35 @@ app.get(["/searchautocomplete/ajax/suggest", "/searchautocomplete/ajax/suggest/"
     textAll: "",
     urlAll: "/catalogsearch/result/?q=" + encodeURIComponent(q),
   });
+});
+
+// Backs the header suggestion dropdown, which lists products and — as the
+// original does under an "Information" heading — matching content pages.
+// Page matching is by title and stored description only, so it finds less
+// than the origin's full-text index does.
+app.get("/api/autocomplete", (req, res) => {
+  const q = (req.query.q || "").toString().trim().toLowerCase();
+  if (!q) return res.json({ products: [], pages: [], total: 0 });
+  const like = `%${q}%`;
+
+  const products = db.prepare(
+    "SELECT * FROM products WHERE name != '' AND (LOWER(name) LIKE ? OR LOWER(model_code) LIKE ?) LIMIT 8"
+  ).all(like, like).map(normalizeProduct);
+
+  let pages = [];
+  try {
+    pages = db.prepare(
+      `SELECT title, url FROM pages
+        WHERE title IS NOT NULL AND TRIM(title) != ''
+          AND (LOWER(title) LIKE ? OR LOWER(description) LIKE ?)
+        LIMIT 4`
+    ).all(like, like).map(p => ({
+      title: p.title,
+      href: (p.url || "").replace(/^https?:\/\/www\.reginox\.com/, "") || "/",
+    }));
+  } catch (e) { pages = []; }
+
+  res.json({ products, pages, total: products.length + pages.length });
 });
 
 // Advanced Search. The mirrored form posts name / sku / short_description;
