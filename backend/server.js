@@ -1832,6 +1832,20 @@ function processHtml(html, pageName) {
     (match, fname) => `href="/assets/dxf/${fname}"`
   );
 
+  // Background and inline videos point at reginox.nl, the one domain the rest
+  // of the rewriting leaves alone (it is a different site, not this one). They
+  // are the last runtime dependency on an external host, and the largest —
+  // 50MB for a single header clip — so they are mirrored alongside the other
+  // videos. Covers plain src="" and jarallax's data-video-src="mp4:…"; the
+  // stored filename has spaces collapsed to underscores.
+  html = html.replace(
+    /(["'])(mp4:)?https?:\/\/www\.reginox\.nl\/media\/wysiwyg\/video\/([^"']+?\.(?:mp4|webm|mov))\1/gi,
+    (m, quote, scheme, file) => {
+      const name = decodeURIComponent(file).replace(/\s+/g, "_");
+      return `${quote}${scheme || ""}/assets/video/${name}${quote}`;
+    }
+  );
+
   // "Download Productsheet" buttons call a live PDF-generation endpoint
   // (md_productpdf) that has no local equivalent — there's no static file to
   // mirror since Magento builds the PDF on request. Stash the domain behind a
