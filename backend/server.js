@@ -2034,6 +2034,20 @@ function listPages() {
   return fs.readdirSync(PAGES_DIR).map(f => (f.endsWith(".gz") ? f.slice(0, -3) : f));
 }
 
+// A soft-deleted product keeps its mirrored HTML page on disk, and the slug
+// routes fall back to serving that file when the database lookup finds
+// nothing — which would hand back the page of a product that is supposed to
+// be gone. Checked explicitly before those fallbacks run.
+function isDeletedSlug(slug) {
+  if (!slug) return false;
+  try {
+    const r = db.prepare(
+      "SELECT 1 FROM products WHERE deleted_at IS NOT NULL AND (page_url LIKE ? OR page_url LIKE ?) LIMIT 1"
+    ).get(`%/${slug}`, `%/${slug}/`);
+    return !!r;
+  } catch (e) { return false; }
+}
+
 function servePage(pageName, res) {
   const raw = readPage(pageName);
   if (raw === null) return false;
@@ -2195,10 +2209,12 @@ async function serveProductOrFilter(cat, slug, req, res, page) {
   const cfg = CAT_CONFIG[cat];
   const prefix = cfg?.prefix || `${cat}_`;
 
+  if (isDeletedSlug(slug)) return serve404(res);
+
   // 1. Is it a PRODUCT? Serve the local mirrored detail page (gallery/downloads work).
   if (cfg && !page) {
     const dbUrl = `https://www.reginox.com${cfg.urlBase}/${slug}`;
-    const p = db.prepare("SELECT local_page FROM products WHERE page_url = ? OR page_url LIKE ?")
+    const p = db.prepare("SELECT local_page FROM products WHERE deleted_at IS NULL AND (page_url = ? OR page_url LIKE ?)")
                 .get(dbUrl, `%/${slug}`);
     if (p?.local_page && servePage(p.local_page, res)) return;
   }
@@ -2230,8 +2246,9 @@ Object.keys(CAT_CONFIG).forEach(cat => {
 // Must come AFTER exact category routes (/product-range/sinks etc.).
 app.get("/product-range/:slug", async (req, res) => {
   const slug = req.params.slug;
+  if (isDeletedSlug(slug)) return serve404(res);
   // Product? serve local detail page.
-  const p = db.prepare("SELECT local_page FROM products WHERE page_url LIKE ?").get(`%/${slug}`);
+  const p = db.prepare("SELECT local_page FROM products WHERE deleted_at IS NULL AND page_url LIKE ?").get(`%/${slug}`);
   if (p?.local_page && servePage(p.local_page, res)) return;
   // Otherwise a FILTER on /product-range → mirrored shell, grid from the DB.
   for (const cfg of Object.values(CAT_CONFIG)) {
@@ -2317,7 +2334,7 @@ app.get("/api/products", (req, res) => {
   const { category, q, page = 1, limit = 200,
           material, mounting, width, shape, reversible } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
-  const where = ["name != ''"];
+  const where = ["name != '' AND deleted_at IS NULL"];
   const params = [];
 
   if (category) { where.push("LOWER(category) = LOWER(?)"); params.push(category); }
@@ -2359,7 +2376,7 @@ app.get("/api/products", (req, res) => {
 app.get("/api/filters/:category", (req, res) => {
   const cat = req.params.category;
   const { material, mounting, width, shape, reversible } = req.query;
-  const base = ["LOWER(category) = LOWER(?)", "name != ''"];
+  const base = ["LOWER(category) = LOWER(?)", "name != '' AND deleted_at IS NULL"];
   const baseParams = [cat];
 
   // Build filter function that adds active filter conditions
@@ -2393,7 +2410,7 @@ app.get("/api/filters/:category", (req, res) => {
 
   res.json({
     material:   counts("material_category", "material_category", "material"),
-    mounting:   db.prepare(`SELECT DISTINCT mounting_type as value FROM products WHERE LOWER(category) = LOWER(?) AND mounting_type IS NOT NULL AND mounting_type != ''`).all(cat),
+    mounting:   db.prepare(`SELECT DISTINCT mounting_type as value FROM products WHERE deleted_at IS NULL AND LOWER(category) = LOWER(?) AND mounting_type IS NOT NULL AND mounting_type != ''`).all(cat),
     width:      counts("cabinet_width", "cabinet_width", "width"),
     shape:      counts("shape", "shape", "shape"),
     reversible: counts("reversible", "reversible", "reversible"),
@@ -2402,20 +2419,20 @@ app.get("/api/filters/:category", (req, res) => {
 
 app.get("/api/products/slug/:slug", (req, res) => {
   const slug = req.params.slug;
-  const p = db.prepare("SELECT * FROM products WHERE page_url LIKE ?").get(`%${slug}`) ||
-            db.prepare("SELECT * FROM products WHERE LOWER(model_code) = LOWER(?)").get(slug);
+  const p = db.prepare("SELECT * FROM products WHERE deleted_at IS NULL AND page_url LIKE ?").get(`%${slug}`) ||
+            db.prepare("SELECT * FROM products WHERE deleted_at IS NULL AND LOWER(model_code) = LOWER(?)").get(slug);
   if (!p) return res.status(404).json({ error: "Not found" });
   res.json(normalizeProduct(p));
 });
 
 app.get("/api/products/:id", (req, res) => {
-  const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
+  const p = db.prepare("SELECT * FROM products WHERE deleted_at IS NULL AND id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Not found" });
   res.json(normalizeProduct(p));
 });
 
 app.get("/api/categories", (req, res) => {
-  const cats = db.prepare("SELECT category, COUNT(*) as count FROM products WHERE category IS NOT NULL AND category != '' AND name != '' GROUP BY category ORDER BY count DESC").all();
+  const cats = db.prepare("SELECT category, COUNT(*) as count FROM products WHERE category IS NOT NULL AND category != '' AND name != '' AND deleted_at IS NULL GROUP BY category ORDER BY count DESC").all();
   res.json(cats);
 });
 
@@ -2424,7 +2441,7 @@ app.get("/api/search", (req, res) => {
   if (!q) return res.json([]);
   const ql = q.toLowerCase();
   let results = db.prepare(
-    "SELECT * FROM products WHERE name != '' AND (LOWER(name) LIKE ? OR LOWER(model_code) LIKE ?)"
+    "SELECT * FROM products WHERE name != '' AND deleted_at IS NULL AND (LOWER(name) LIKE ? OR LOWER(model_code) LIKE ?)"
   ).all(`%${ql}%`, `%${ql}%`);
 
   // Sorting. Magento's search defaults to "relevance": exact-name match first,
@@ -2455,7 +2472,7 @@ app.get("/api/search", (req, res) => {
 app.get(["/search/ajax/suggest", "/search/ajax/suggest/"], (req, res) => {
   const q = (req.query.q || "").toLowerCase();
   if (!q) return res.json([]);
-  const rows = db.prepare("SELECT DISTINCT name FROM products WHERE name != '' AND LOWER(name) LIKE ? LIMIT 8")
+  const rows = db.prepare("SELECT DISTINCT name FROM products WHERE name != '' AND deleted_at IS NULL AND LOWER(name) LIKE ? LIMIT 8")
     .all(`%${q}%`);
   res.json(rows.map(r => ({ title: r.name, num_results: 1 })));
 });
@@ -2491,7 +2508,7 @@ app.get("/api/autocomplete", (req, res) => {
   const like = `%${q}%`;
 
   const products = db.prepare(
-    "SELECT * FROM products WHERE name != '' AND (LOWER(name) LIKE ? OR LOWER(model_code) LIKE ?) LIMIT 8"
+    "SELECT * FROM products WHERE name != '' AND deleted_at IS NULL AND (LOWER(name) LIKE ? OR LOWER(model_code) LIKE ?) LIMIT 8"
   ).all(like, like).map(normalizeProduct);
 
   let pages = [];
@@ -2519,7 +2536,7 @@ app.get("/api/advanced-search", (req, res) => {
     sku: "model_code",
     short_description: "description",
   };
-  const where = ["name != ''"];
+  const where = ["name != '' AND deleted_at IS NULL"];
   const params = [];
   for (const [param, col] of Object.entries(FIELDS)) {
     const v = (req.query[param] || "").toString().trim();
@@ -2537,7 +2554,7 @@ app.get("/api/advanced-search", (req, res) => {
 
 app.get("/api/stats", (req, res) => {
   res.json({
-    products: db.prepare("SELECT COUNT(*) as n FROM products WHERE name != ''").get().n,
+    products: db.prepare("SELECT COUNT(*) as n FROM products WHERE name != '' AND deleted_at IS NULL").get().n,
     pages: db.prepare("SELECT COUNT(*) as n FROM pages").get().n,
     assets: db.prepare("SELECT COUNT(*) as n FROM assets").get().n,
     images: db.prepare("SELECT COUNT(*) as n FROM assets WHERE asset_type='image'").get().n,
@@ -2623,9 +2640,10 @@ app.get(/.*/, async (req, res) => {
   if (pageSlug && servePage(`${pageSlug}.html`, res)) return;
 
   const last = segs[segs.length - 1] || "";
+  if (isDeletedSlug(last)) return serve404(res);
   if (last && !req.path.startsWith("/media") && !req.path.startsWith("/static") && !req.path.startsWith("/assets")) {
     try {
-      const p = db.prepare("SELECT local_page FROM products WHERE page_url LIKE ? OR page_url LIKE ?")
+      const p = db.prepare("SELECT local_page FROM products WHERE deleted_at IS NULL AND (page_url LIKE ? OR page_url LIKE ?)")
                   .get(`%/${last}`, `%/${last}/`);
       if (p?.local_page && servePage(p.local_page, res)) return;
     } catch (e) {}
