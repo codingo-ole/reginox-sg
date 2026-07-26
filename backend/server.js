@@ -2106,6 +2106,13 @@ li:has(> a[href="/assortiment/werkbladen/rvs"]),
 li:has(> a[href="/assortiment/werkbladen/tap-en-lekbladen"]),
 li:has(> a[href="/inspiration/stainless-steel-worktops"]),
 li:has(> a[href="/stainless-steel-worktops"]){display:none !important}
+/* Chevron beside the region flag: the switcher no longer opens anything,
+   since Singapore is the only region left. Drawn by the theme as an icon-font
+   pseudo-element, so it is hidden rather than removed from the markup. */
+#switcher-language-trigger:after,
+#switcher-language-trigger.active:after,
+.switcher-trigger.action.toggle:after{display:none !important;content:none !important}
+#switcher-language-trigger{cursor:default}
 </style>
 `;
 
