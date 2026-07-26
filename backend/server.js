@@ -2007,6 +2007,15 @@ function processHtml(html, pageName) {
     html = html.replace(mBv[0], '\x00KANTOR\x00').replace(mFe[0], mBv[0]).replace('\x00KANTOR\x00', mFe[0]);
   }
 
+  // Currency shown as Singapore dollars. The catalogue carries no prices —
+  // every amount upstream is 0 and hidden behind "Please contact us for
+  // price" — so this only relabels the empty price widgets and the JS config
+  // that feeds them; there are no figures being converted.
+  html = html.replace(/"currency_code"\s*:\s*"EUR"/g, '"currency_code":"SGD"');
+  html = html.replace(/"baseCurrencyCode"\s*:\s*"EUR"/g, '"baseCurrencyCode":"SGD"');
+  html = html.replace(/\u20AC(?=\s*[\d.,])/g, 'S$');
+  html = html.replace(/"displayCurrencySymbol"\s*:\s*"[^"]*"/g, '"displayCurrencySymbol":"S$"');
+
   // Strip productListToolbarForm widget init — prevents Magento from overriding our pagination
   html = html.replace(/\s+data-mage-init='[^']*productListToolbarForm[^']*'/g, '');
 
