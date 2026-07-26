@@ -1613,10 +1613,11 @@ const SEARCH_UI_SCRIPT = `
    class names: Mirasvit's script blanks any element wearing them. Same blue
    top rule, same uppercase section headings, 80px thumbnails, blue bold
    match highlight, and the "view all" bar pinned to the bottom. */
-.block-search .control{position:relative}
-/* Anchored right so it grows leftward: the search sits at the far right of
-   the header, and anchoring left ran the panel past the viewport edge. */
-.rg-ac{display:none;position:absolute;top:100%;right:0;left:auto;width:100%;min-width:320px;max-width:92vw;box-sizing:border-box;background:#fff;border-top:2px solid #1ba1fc;border-radius:3px;box-shadow:0 3px 10px rgba(0,0,0,.16);z-index:1000;text-align:left;overflow:hidden}
+/* Fixed, and attached to <body> rather than beside the input: the search
+   form sits inside .block-content, which is overflow:hidden, so a panel
+   positioned within it is clipped away entirely however it is anchored.
+   Placed under the input by measurement instead — see place() below. */
+.rg-ac{display:none;position:fixed;box-sizing:border-box;background:#fff;border-top:2px solid #1ba1fc;border-radius:3px;box-shadow:0 3px 10px rgba(0,0,0,.16);z-index:100000;text-align:left;overflow:hidden}
 .rg-ac._active{display:block}
 .rg-ac-close{position:absolute;right:6px;top:0;padding:10px;font-weight:bold;font-size:1.6rem;line-height:1rem;color:#999;cursor:pointer}
 .rg-ac-scroll{max-height:70vh;overflow-y:auto;padding-bottom:40px}
@@ -1663,10 +1664,21 @@ const SEARCH_UI_SCRIPT = `
       if (b) return b;
       b = document.createElement('div');
       b.className = 'rg-ac';
-      var control = input.closest('.control') || input.parentNode;
-      if (input.nextSibling) control.insertBefore(b, input.nextSibling);
-      else control.appendChild(b);
+      document.body.appendChild(b);
       return b;
+    }
+    // Line the panel up under the input. Right-aligned to it, because the
+    // search sits at the far right of the header; widened to a readable
+    // minimum, and nudged back inside the viewport if that overflows.
+    function place(box){
+      var r = input.getBoundingClientRect();
+      var w = Math.max(r.width, 320);
+      if (w > window.innerWidth - 16) w = window.innerWidth - 16;
+      var left = r.right - w;
+      if (left < 8) left = 8;
+      box.style.top = Math.round(r.bottom) + 'px';
+      box.style.left = Math.round(left) + 'px';
+      box.style.width = Math.round(w) + 'px';
     }
     var timer, items = [], pages = [], sel = -1, lastQ = '';
     function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -1684,6 +1696,7 @@ const SEARCH_UI_SCRIPT = `
       if (!box) return;
       if (!items.length && !pages.length){ box.innerHTML=''; box.classList.remove('_active'); return; }
       box.classList.add('_active');
+      place(box);
 
       var html = '<span class="rg-ac-close">&times;</span><div class="rg-ac-scroll">';
 
@@ -1747,7 +1760,19 @@ const SEARCH_UI_SCRIPT = `
       else if (e.key==='Enter' && sel>=0){ e.preventDefault(); window.location.href = items[sel].href||'#'; }
       else if (e.key==='Escape'){ items=[]; render(); }
     });
-    document.addEventListener('click', function(e){ if (!form.contains(e.target)){ items=[]; render(); } });
+    document.addEventListener('click', function(e){
+      var box = document.querySelector('.rg-ac');
+      if (box && box.contains(e.target)) return;
+      if (!form.contains(e.target)){ items=[]; pages=[]; render(); }
+    });
+    // Fixed positioning is relative to the viewport, so the panel has to be
+    // re-measured whenever the input can have moved under it.
+    ['scroll','resize'].forEach(function(ev){
+      window.addEventListener(ev, function(){
+        var box = document.querySelector('.rg-ac');
+        if (box && box.classList.contains('_active')) place(box);
+      }, true);
+    });
   });
 })();
 </script>
