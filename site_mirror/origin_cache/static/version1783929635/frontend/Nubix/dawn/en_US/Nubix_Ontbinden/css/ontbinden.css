@@ -1,0 +1,12 @@
+.nubix-ontbinden { max-width: 640px; margin: 0 auto; }
+.nubix-ontbinden__title { margin-bottom: .5em; }
+.nubix-ontbinden__intro { margin-bottom: 1.5em; }
+.nubix-ontbinden__form .field { margin-bottom: 1.2em; }
+.nubix-ontbinden__form label { display: block; font-weight: 600; margin-bottom: .35em; }
+.nubix-ontbinden__form input[type="text"],
+.nubix-ontbinden__form input[type="email"],
+.nubix-ontbinden__form textarea { width: 100%; box-sizing: border-box; }
+.nubix-ontbinden__form .note { font-size: .85em; color: #666; margin-top: .35em; }
+.nubix-ontbinden__step legend { font-size: 1.15em; font-weight: 700; margin-bottom: 1em; }
+.nubix-ontbinden__actions { display: flex; gap: 1em; align-items: center; }
+.nubix-ontbinden--success { text-align: center; }

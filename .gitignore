@@ -1,9 +1,15 @@
 node_modules/
 *.log
 
-# Runtime proxy caches — regenerated automatically by hitting reginox.com
-# on first request after each deploy/restart. Safe to exclude from git.
-site_mirror/origin_cache/
+# origin_cache/static (20MB) IS tracked: it is the theme's RequireJS modules,
+# and they have to come off local disk. Served over the CDN redirect instead,
+# each file took 2-3s, and RequireJS abandons a module after waitSeconds (7),
+# so ~30 modules were left hanging in production and PageBuilder never ran —
+# which is why the jarallax background videos rendered as empty boxes.
+# origin_cache/media is 1GB and stays on B2.
+site_mirror/origin_cache/media/
+
+# Dead caches from the removed live proxies. Nothing reads these now.
 site_mirror/search_cache/
 site_mirror/listing_cache/
 
