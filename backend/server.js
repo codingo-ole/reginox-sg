@@ -2011,10 +2011,13 @@ function processHtml(html, pageName) {
   // every amount upstream is 0 and hidden behind "Please contact us for
   // price" — so this only relabels the empty price widgets and the JS config
   // that feeds them; there are no figures being converted.
-  html = html.replace(/"currency_code"\s*:\s*"EUR"/g, '"currency_code":"SGD"');
-  html = html.replace(/"baseCurrencyCode"\s*:\s*"EUR"/g, '"baseCurrencyCode":"SGD"');
-  html = html.replace(/\u20AC(?=\s*[\d.,])/g, 'S$');
-  html = html.replace(/"displayCurrencySymbol"\s*:\s*"[^"]*"/g, '"displayCurrencySymbol":"S$"');
+  // The visible amount is redrawn by Magento's priceBox after load, from a
+  // priceFormat whose symbol is carried as the JSON escape \u20ac rather than
+  // a literal character — replacing the rendered markup alone flipped back to
+  // euros a moment later. Both the escape and every EUR code are rewritten.
+  html = html.replace(/\\u20ac/gi, 'S$');
+  html = html.replace(/\u20AC/g, 'S$');
+  html = html.replace(/\bEUR\b/g, 'SGD');
 
   // Strip productListToolbarForm widget init — prevents Magento from overriding our pagination
   html = html.replace(/\s+data-mage-init='[^']*productListToolbarForm[^']*'/g, '');
