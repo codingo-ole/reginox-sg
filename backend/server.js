@@ -1983,7 +1983,16 @@ function processHtml(html, pageName) {
   // emoji, which every current platform renders.
   html = html.replace(
     /<img[^>]*src="\/assets\/com\.png"[^>]*>/g,
-    '<span class="rg-flag" style="font-size:20px;line-height:1;vertical-align:middle">\u{1F1F8}\u{1F1EC}</span>'
+    '<img src="/assets/sg-flag.svg" width="24" height="24" alt="Singapore">'
+  );
+
+  // Only the Singapore storefront remains, so the other regions are dropped
+  // from the switcher entirely rather than left pointing at reginox.de / .nl /
+  // .co.uk. Matched on the destination, not the label, since the markup
+  // classes differ per view.
+  html = html.replace(
+    /<li[^>]*class="[^"]*switcher-option[^"]*"[^>]*>(?:(?!<\/li>)[\s\S])*?reginox\.(?:de|nl|co\.uk)(?:(?!<\/li>)[\s\S])*?<\/li>/g,
+    ''
   );
 
   // Contact page "Our offices": the local entity leads and the Dutch head
