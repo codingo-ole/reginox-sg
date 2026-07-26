@@ -670,16 +670,25 @@ const CLIENT_FILTER_SCRIPT = `
     }
 
     // ── Sort filtered products ───────────────────────────────────────────
+    // Position / Color / Hide-price ranks are per category, so on the combined
+    // page — where all six categories sit in one list — they collide: rank 1
+    // exists once per category. That page reads the *_all columns instead,
+    // which hold the origin's ordering across the whole catalogue.
+    function rank(p, field) {
+      var v = (baseCat === 'ALL') ? p[field + '_all'] : p[field];
+      return (v === null || v === undefined) ? 99999 : v;
+    }
     function getSorted() {
       var arr = filteredProducts.slice();
+      var byName = function(a,b){ return (a.name||'').localeCompare(b.name||''); };
       if (currentSort === 'name')
-        arr.sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
+        arr.sort(byName);
       else if (currentSort === 'color')
-        arr.sort(function(a,b){ return (a.color_order||99999) - (b.color_order||99999) || (a.name||'').localeCompare(b.name||''); });
+        arr.sort(function(a,b){ return rank(a,'color_order') - rank(b,'color_order') || byName(a,b); });
       else if (currentSort === 'hideprice_action')
-        arr.sort(function(a,b){ return (a.hideprice_order||99999) - (b.hideprice_order||99999) || (a.name||'').localeCompare(b.name||''); });
+        arr.sort(function(a,b){ return rank(a,'hideprice_order') - rank(b,'hideprice_order') || byName(a,b); });
       else
-        arr.sort(function(a,b){ return (a.position||99999) - (b.position||99999); });
+        arr.sort(function(a,b){ return rank(a,'position') - rank(b,'position') || byName(a,b); });
       if (currentDir === 'desc') arr.reverse();
       return arr;
     }
@@ -2560,6 +2569,11 @@ function normalizeProduct(p) {
     position: p.position || null,
     color_order: p.color_order || null,
     hideprice_order: p.hideprice_order || null,
+    // Catalogue-wide ranks, used by the combined /product-range page — the
+    // per-category ones above repeat across categories and cannot order it.
+    position_all: p.position_all || null,
+    color_order_all: p.color_order_all || null,
+    hideprice_order_all: p.hideprice_order_all || null,
   };
 }
 
