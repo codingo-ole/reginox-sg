@@ -674,25 +674,35 @@ const CLIENT_FILTER_SCRIPT = `
     // page — where all six categories sit in one list — they collide: rank 1
     // exists once per category. That page reads the *_all columns instead,
     // which hold the origin's ordering across the whole catalogue.
-    function rank(p, field) {
-      var v = (baseCat === 'ALL') ? p[field + '_all'] : p[field];
-      return (v === null || v === undefined) ? 99999 : v;
+    // Which stored rank to read. Descending is not simply the ascending list
+    // turned around — Magento orders it separately — so where reversing did
+    // not reproduce the origin there is a _desc rank recorded from it. Suffix
+    // rules: _all on the combined page, _desc where a descending rank exists.
+    function sortColumn() {
+      var all = (baseCat === 'ALL'), desc = (currentDir === 'desc');
+      if (currentSort === 'color')
+        return all ? 'color_order_all' : 'color_order';
+      if (currentSort === 'hideprice_action')
+        return (all ? 'hideprice_order_all' : 'hideprice_order') + (desc ? '_desc' : '');
+      if (currentSort === 'name')
+        return desc ? (all ? 'name_order_all_desc' : 'name_order_desc') : null; // null → by name
+      return all ? ('position_all' + (desc ? '_desc' : '')) : 'position';
     }
     function getSorted() {
       var arr = filteredProducts.slice();
+      var col = sortColumn();
       var byName = function(a,b){ return (a.name||'').localeCompare(b.name||''); };
-      if (currentSort === 'name')
-        arr.sort(byName);
-      else if (currentSort === 'color')
-        arr.sort(function(a,b){ return rank(a,'color_order') - rank(b,'color_order') || byName(a,b); });
-      else if (currentSort === 'hideprice_action')
-        arr.sort(function(a,b){ return rank(a,'hideprice_order') - rank(b,'hideprice_order') || byName(a,b); });
-      else
-        arr.sort(function(a,b){ return rank(a,'position') - rank(b,'position') || byName(a,b); });
-      // Color ignores the direction toggle upstream — asc and desc return the
-      // same order there — so reversing it is what made that combination
-      // disagree with the origin completely.
-      if (currentDir === 'desc' && currentSort !== 'color') arr.reverse();
+      var rank = function(p){
+        var v = col ? p[col] : null;
+        return (v === null || v === undefined) ? 99999 : v;
+      };
+      if (!col) arr.sort(byName);
+      else arr.sort(function(a,b){ return rank(a) - rank(b) || byName(a,b); });
+      // Color ignores the direction toggle upstream (asc and desc return the
+      // same order), and a _desc column already holds the descending order —
+      // reversing in either case is what made these disagree.
+      var pakaiKolomDesc = col && col.indexOf('_desc') !== -1;
+      if (currentDir === 'desc' && currentSort !== 'color' && !pakaiKolomDesc) arr.reverse();
       return arr;
     }
 
@@ -2577,6 +2587,13 @@ function normalizeProduct(p) {
     position_all: p.position_all || null,
     color_order_all: p.color_order_all || null,
     hideprice_order_all: p.hideprice_order_all || null,
+    // Descending ranks, recorded where reversing the ascending list did not
+    // reproduce the origin's order.
+    position_all_desc: p.position_all_desc || null,
+    name_order_desc: p.name_order_desc || null,
+    name_order_all_desc: p.name_order_all_desc || null,
+    hideprice_order_desc: p.hideprice_order_desc || null,
+    hideprice_order_all_desc: p.hideprice_order_all_desc || null,
   };
 }
 
