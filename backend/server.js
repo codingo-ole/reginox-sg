@@ -73,21 +73,10 @@ app.use("/fonts", (req, res, next) => {
   next();
 });
 
-// Some theme JS builds root-relative image paths (/images/loader-1.gif) that
-// really live under the versioned static theme dir. The origin 404s these too,
-// so this is cosmetic — it just spares the browser a failed request. Resolved
-// against whichever mirrored static version actually has the file.
-app.use("/images", (req, res, next) => {
-  const fname = req.path.replace(/^\//, "").split("?")[0];
-  if (!fname || fname.includes("..")) return next();
-  const staticRoot = path.join(ORIGIN_CACHE_DIR, "static");
-  if (!fs.existsSync(staticRoot)) return next();
-  for (const ver of fs.readdirSync(staticRoot)) {
-    const p = path.join(staticRoot, ver, "frontend/Nubix/dawn/en_US/images", fname);
-    if (fs.existsSync(p)) return res.sendFile(p);
-  }
-  next();
-});
+// (Theme JS also asks for a root-relative /images/loader-1.gif. Left to 404:
+// the origin 404s it too, and resolving it from the mirrored static dir only
+// works in dev — that directory is gitignored, so production would keep
+// 404ing anyway and the two environments would disagree.)
 
 // Instagram widget feed requested by Magento_Theme/js/theme.js. The origin
 // answers with an empty array — the widget has no images — so mirror that
