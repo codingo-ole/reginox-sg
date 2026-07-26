@@ -1340,17 +1340,28 @@ const SEARCH_SCRIPT = `
     var params = new URLSearchParams(window.location.search);
     var q = (params.get('q') || '').trim();
 
+    // The same page backs both searches. Advanced Search arrives on
+    // /catalogsearch/advanced/result/ carrying name / sku / short_description
+    // instead of q, and titles itself differently.
+    var ADV_FIELDS = ['name', 'sku', 'short_description'];
+    var advQuery = new URLSearchParams();
+    ADV_FIELDS.forEach(function(k){
+      var v = (params.get(k) || '').trim();
+      if (v) advQuery.set(k, v);
+    });
+    var isAdvanced = window.location.pathname.indexOf('/catalogsearch/advanced') === 0;
+
     function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-    // Set the page title text ("Search results for: '<q>'")
+    var heading = isAdvanced ? 'Catalog Advanced Search' : "Search results for: '" + q + "'";
     document.querySelectorAll('.base[data-ui-id="page-title-wrapper"], .page-title-wrapper .base').forEach(function(el){
-      el.textContent = "Search results for: '" + q + "'";
+      el.textContent = heading;
     });
-    document.title = "Search results for: '" + q + "'";
+    document.title = isAdvanced ? 'Advanced Search Results' : heading;
 
     // Prefill the search box
     var si = document.getElementById('search');
-    if (si) si.value = q;
+    if (si && !isAdvanced) si.value = q;
 
     var grid = document.querySelector('ol.products.list.items.product-items, ol.product-items');
 
@@ -1373,21 +1384,32 @@ const SEARCH_SCRIPT = `
         '</div></li>';
     }
 
+    // Magento's wording: a single page of results reads "N Items", and only a
+    // paginated set reads "Items 1-N of M". Results are rendered in one page
+    // here, so anything up to the page size takes the first form — the origin
+    // shows "13 Items" for a 13-hit search, not "Items 1-13 of 13".
     function setToolbar(n){
+      var PAGE_SIZE = 36;
+      var text = n === 0 ? 'No items'
+        : (n <= PAGE_SIZE ? n + (n === 1 ? ' Item' : ' Items')
+                          : 'Items 1-' + n + ' of ' + n);
       document.querySelectorAll('.toolbar-amount').forEach(function(el){
-        el.textContent = n === 0 ? 'No items' : (n === 1 ? '1 Item' : 'Items 1-' + n + ' of ' + n);
+        el.textContent = text;
       });
     }
 
-    if (!q) { if (grid) grid.innerHTML=''; setToolbar(0); return; }
+    var hasCriteria = isAdvanced ? (advQuery.toString().length > 0) : !!q;
+    if (!hasCriteria) { if (grid) grid.innerHTML=''; setToolbar(0); return; }
 
     // Default search sort = relevance (matches the original). The sorter dropdown
     // on the search page re-fetches with &sort=.
     var currentSort = 'relevance';
 
     function load(){
-      var url = '/api/search?q=' + encodeURIComponent(q) +
-                (currentSort && currentSort !== 'relevance' ? '&sort=' + currentSort : '');
+      var url = isAdvanced
+        ? '/api/advanced-search?' + advQuery.toString()
+        : '/api/search?q=' + encodeURIComponent(q) +
+          (currentSort && currentSort !== 'relevance' ? '&sort=' + currentSort : '');
       fetch(url)
         .then(function(r){ return r.json(); })
         .then(function(list){
@@ -1590,7 +1612,10 @@ const SEARCH_UI_SCRIPT = `
    input inside .control — and mirrors its layout: a white panel with a
    section heading, then a thumbnail-and-name row per product. */
 .block-search .control{position:relative}
-.rg-ac{display:none;position:absolute;top:100%;left:0;right:0;min-width:320px;background:#fff;border:1px solid #e0e0e0;box-shadow:0 4px 12px rgba(0,0,0,.15);z-index:1000;text-align:left}
+/* Anchored to the input's RIGHT edge so it grows leftward: the search sits at
+   the far right of the header, and anchoring left pushed a 320px-wide panel
+   past the viewport edge (measured 1627px against a 1440px window). */
+.rg-ac{display:none;position:absolute;top:100%;right:0;left:auto;width:320px;max-width:90vw;background:#fff;border:1px solid #e0e0e0;box-shadow:0 4px 12px rgba(0,0,0,.15);z-index:1000;text-align:left}
 .rg-ac._active{display:block}
 .rg-ac-title{padding:10px 14px;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#8a8a8a;border-bottom:1px solid #ececec}
 .rg-ac-list{list-style:none;margin:0;padding:0;max-height:380px;overflow-y:auto}
@@ -2154,6 +2179,13 @@ app.get("/checkout/cart", (req, res) => res.redirect("/"));
 app.get(["/catalogsearch/result", "/catalogsearch/result/"], (req, res) => {
   serveFirst(res, "catalogsearch_result.html");
 });
+// Advanced Search results. The mirrored form (catalogsearch_advanced.html)
+// submits here, but nothing served this path, so it fell through to a 404.
+// Same result shell as above — SEARCH_SCRIPT notices the /advanced path and
+// queries /api/advanced-search with the form's fields instead of ?q=.
+app.get(["/catalogsearch/advanced/result", "/catalogsearch/advanced/result/"], (req, res) => {
+  serveFirst(res, "catalogsearch_result.html");
+});
 app.get("/installation", (req, res) => servePage("installation.html", res) || res.redirect("/service"));
 app.get("/accessoireshop", (req, res) => res.redirect("/product-range/accessories"));
 app.get("/terms-conditions-com", (req, res) => res.redirect("/"));
@@ -2335,6 +2367,31 @@ app.get(["/searchautocomplete/ajax/suggest", "/searchautocomplete/ajax/suggest/"
     textAll: "",
     urlAll: "/catalogsearch/result/?q=" + encodeURIComponent(q),
   });
+});
+
+// Advanced Search. The mirrored form posts name / sku / short_description;
+// Magento ANDs whatever is filled in and ignores the rest. sku maps to
+// model_code (R25444 and friends), short_description to the description text.
+app.get("/api/advanced-search", (req, res) => {
+  const FIELDS = {
+    name: "name",
+    sku: "model_code",
+    short_description: "description",
+  };
+  const where = ["name != ''"];
+  const params = [];
+  for (const [param, col] of Object.entries(FIELDS)) {
+    const v = (req.query[param] || "").toString().trim();
+    if (!v) continue;
+    where.push(`LOWER(${col}) LIKE ?`);
+    params.push(`%${v.toLowerCase()}%`);
+  }
+  // No criteria at all → no results, rather than the whole catalogue.
+  if (params.length === 0) return res.json([]);
+  const rows = db.prepare(
+    `SELECT * FROM products WHERE ${where.join(" AND ")} ORDER BY name COLLATE NOCASE ASC`
+  ).all(...params);
+  res.json(rows.map(normalizeProduct));
 });
 
 app.get("/api/stats", (req, res) => {
