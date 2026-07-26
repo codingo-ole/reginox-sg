@@ -1586,11 +1586,20 @@ const LISTING_LIVE_SCRIPT = `
 // backed by /api/search, matching the original quickSearch behaviour.
 const SEARCH_UI_SCRIPT = `
 <style>
-/* The theme styles the suggestion box only as something to hide, so the
-   dropdown built below needs its own look. */
-#search_autocomplete .rg-sugg-list{list-style:none;margin:0;padding:4px 0;background:#fff;border:1px solid #d1d1d1;box-shadow:0 2px 6px rgba(0,0,0,.12);max-height:340px;overflow-y:auto}
-#search_autocomplete .rg-sugg{padding:8px 14px;cursor:pointer;font-size:14px;line-height:1.3;color:#383435;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#search_autocomplete .rg-sugg:hover,#search_autocomplete .rg-sugg.rg-active{background:#f0f0f0}
+/* Suggestion dropdown. Sits where the original's does — directly under the
+   input inside .control — and mirrors its layout: a white panel with a
+   section heading, then a thumbnail-and-name row per product. */
+.block-search .control{position:relative}
+.rg-ac{display:none;position:absolute;top:100%;left:0;right:0;min-width:320px;background:#fff;border:1px solid #e0e0e0;box-shadow:0 4px 12px rgba(0,0,0,.15);z-index:1000;text-align:left}
+.rg-ac._active{display:block}
+.rg-ac-title{padding:10px 14px;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#8a8a8a;border-bottom:1px solid #ececec}
+.rg-ac-list{list-style:none;margin:0;padding:0;max-height:380px;overflow-y:auto}
+.rg-ac-item{display:flex;align-items:center;gap:12px;padding:10px 14px;cursor:pointer;border-bottom:1px solid #f4f4f4}
+.rg-ac-item:last-child{border-bottom:0}
+.rg-ac-item:hover,.rg-ac-item._active{background:#f6f6f6}
+.rg-ac-thumb{flex:0 0 48px;width:48px;height:48px;object-fit:contain;background:#fff}
+.rg-ac-name{font-size:14px;line-height:1.35;color:#383435;overflow:hidden}
+.rg-ac-name .rg-hl{background:#ff0;color:inherit}
 </style>
 <script>
 (function(){
@@ -1606,32 +1615,57 @@ const SEARCH_UI_SCRIPT = `
     input.addEventListener('input', sync);
     input.addEventListener('focus', sync);
 
-    var box = document.getElementById('search_autocomplete');
+    // The suggestions are drawn into Mirasvit's own element, using its class
+    // names, exactly as on the original: the theme already ships the CSS for
+    // .mst-searchautocomplete__*, so the dropdown is styled natively instead
+    // of by anything hand-rolled here. (Magento's #search_autocomplete is not
+    // used — the theme hides it outright for this same reason.)
+    // Our own container, and deliberately WITHOUT any mst-* class: Mirasvit's
+    // script re-renders every .mst-searchautocomplete__autocomplete it finds
+    // from its own AJAX call, so anything wearing that class gets wiped a
+    // moment after we fill it. Styled by the rules below instead, shaped to
+    // match the original dropdown (thumbnail on the left, name beside it).
+    function getBox(){
+      var b = document.querySelector('.rg-ac');
+      if (b) return b;
+      b = document.createElement('div');
+      b.className = 'rg-ac';
+      var control = input.closest('.control') || input.parentNode;
+      if (input.nextSibling) control.insertBefore(b, input.nextSibling);
+      else control.appendChild(b);
+      return b;
+    }
     var timer, items = [], sel = -1, lastQ = '';
     function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-    // Wrap the matched query in a yellow highlight span, like the original (Mirasvit mst-search__highlight)
+    // Wrap the matched query in the highlight span the theme styles.
     function hl(name, q){
       var e = esc(name);
       if (!q) return e;
       try {
         var re = new RegExp('(' + q.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&') + ')', 'ig');
-        return e.replace(re, '<span class="mst-search__highlight" style="background:#ff0;color:inherit">$1</span>');
+        return e.replace(re, '<span class="rg-hl">$1</span>');
       } catch(err){ return e; }
     }
     function render(){
+      var box = getBox();
       if (!box) return;
-      if (!items.length){ box.innerHTML=''; box.style.setProperty('display','none','important'); return; }
-      // The theme kills #search_autocomplete outright — display, height and
-      // overflow all !important — because the original draws its suggestions
-      // in Mirasvit's own element instead. Inline !important is what it takes
-      // to win those three back for the dropdown we build here.
-      box.style.setProperty('display','block','important');
-      box.style.setProperty('height','auto','important');
-      box.style.setProperty('overflow','visible','important');
-      box.innerHTML = '<ul role="listbox" class="rg-sugg-list">' + items.map(function(p,i){
-        return '<li class="rg-sugg' + (i===sel?' rg-active':'') + '" data-href="' + esc(p.href||'#') + '" role="option">' + hl(p.name, lastQ) + '</li>';
-      }).join('') + '</ul>';
-      box.querySelectorAll('.rg-sugg').forEach(function(li){
+      if (!items.length){ box.innerHTML=''; box.classList.remove('_active'); return; }
+      box.classList.add('_active');
+      var lis = items.map(function(p,i){
+        // Not loading="lazy": the panel is created hidden and revealed in the
+        // same frame, which leaves lazy thumbnails sitting at naturalWidth 0.
+        // At most a handful of small images, so there is nothing to defer.
+        var thumb = p.image
+          ? '<img class="rg-ac-thumb" src="' + esc(p.image) + '" alt="">'
+          : '<span class="rg-ac-thumb"></span>';
+        return '<li class="rg-ac-item' + (i===sel ? ' _active' : '') +
+          '" data-href="' + esc(p.href||'#') + '" role="option">' +
+          thumb + '<span class="rg-ac-name">' + hl(p.name, lastQ) + '</span></li>';
+      }).join('');
+      box.innerHTML =
+        '<div class="rg-ac-title">Products (' + items.length + ')</div>' +
+        '<ul class="rg-ac-list" role="listbox">' + lis + '</ul>';
+      box.querySelectorAll('.rg-ac-item').forEach(function(li){
         li.addEventListener('mousedown', function(e){ e.preventDefault(); window.location.href = li.getAttribute('data-href'); });
       });
     }
@@ -2287,18 +2321,19 @@ app.get(["/search/ajax/suggest", "/search/ajax/suggest/"], (req, res) => {
 // the Mirasvit URL directly — answered from the database rather than the
 // origin, which it used to proxy on every keystroke.
 app.get(["/searchautocomplete/ajax/suggest", "/searchautocomplete/ajax/suggest/"], (req, res) => {
-  const q = (req.query.q || "").toString().trim().toLowerCase();
-  if (!q) return res.json({ indices: [] });
-  const rows = db.prepare(
-    "SELECT * FROM products WHERE name != '' AND (LOWER(name) LIKE ? OR LOWER(model_code) LIKE ?) LIMIT 8"
-  ).all(`%${q}%`, `%${q}%`).map(normalizeProduct);
+  // Deliberately an empty — but well-formed — result set. Mirasvit's script
+  // reads data.indexes, so this shape keeps it from erroring, while leaving
+  // the visible dropdown to SEARCH_UI_SCRIPT alone; both drawing into the
+  // same container would have them overwrite each other.
+  const q = (req.query.q || "").toString();
   res.json({
-    indices: [{
-      identifier: "magento_catalog_product",
-      title: "Products",
-      items: rows.map(p => ({ name: p.name, url: p.href, image: p.image })),
-      totalItems: rows.length,
-    }],
+    query: q,
+    totalItems: 0,
+    indexes: [],
+    noResults: true,
+    textEmpty: "",
+    textAll: "",
+    urlAll: "/catalogsearch/result/?q=" + encodeURIComponent(q),
   });
 });
 
