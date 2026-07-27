@@ -306,7 +306,8 @@ const FILTER_SCRIPT = `
     // never navigate away.
     var ENGINE_PATHS = ['/product-range/sinks', '/product-range/taps',
       '/assortiment/werkbladen/rvs', '/assortiment/werkbladen/tap-en-lekbladen',
-      '/assortiment/accessoires', '/assortiment/toebehoren'];
+      '/assortiment/accessoires', '/assortiment/toebehoren',
+      '/catalogsearch/result', '/catalogsearch/advanced/result'];
     var p_ = window.location.pathname;
     var engineActive = ENGINE_PATHS.some(function(k){
       return p_ === k || p_.indexOf(k + '/') === 0 || p_.indexOf(k + '?') === 0;
@@ -370,12 +371,20 @@ const CLIENT_FILTER_SCRIPT = `
     // Proxied "live" pages (search / sort variants) already carry the exact
     // original grid+order — the client engine must NOT re-render them.
     if (window.__rgNoEngine) return;
-    if (!document.querySelector('[data-amshopby-filter]')) return;
+    // The search page always runs the engine — it owns the grid there, so it
+    // must boot even if the sidebar is missing (SEARCH_SCRIPT only draws the
+    // heading and the no-results notice around it).
+    if (!isSearchPath() && !document.querySelector('[data-amshopby-filter]')) return;
     initFilterEngine();
   });
 
+  function isSearchPath() {
+    return /^\\/catalogsearch\\/(result|advanced\\/result)/.test(window.location.pathname);
+  }
+
   function initFilterEngine() {
     var path = window.location.pathname;
+    var isSearch = isSearchPath();
     // Every listing page runs the engine off the database. Accessoires and
     // Toebehoren used to navigate to mirrored SEO pages instead, which meant
     // their sort/filter answers came from the origin rather than our own data
@@ -397,7 +406,9 @@ const CLIENT_FILTER_SCRIPT = `
     // Combined catalog /product-range → engine over ALL products (439). Exact
     // match only, so it doesn't shadow /product-range/sinks etc.
     if (!baseCat && (path === '/product-range' || path.indexOf('/product-range?') === 0)) baseCat = 'ALL';
-    if (!baseCat) return;
+    // The search page has no category of its own — its product set comes from
+    // /api/search instead of /api/products (see the fetch at the bottom).
+    if (!baseCat && !isSearch) return;
 
     // On Accessoires/Toebehoren the Category filter lists product types
     // (Colanders, Strainers, …) rather than the Sinks material tree, so
@@ -414,10 +425,53 @@ const CLIENT_FILTER_SCRIPT = `
     };
     var isSubcatPage = (baseCat === 'Accessories' || baseCat === 'Attachments');
 
+    // Top level of the Category tree — a range, matched against p.category.
+    // Everything nested under one of these is a material or a product type.
+    var CAT_RANGE = {
+      'sinks': 'sinks', 'taps': 'taps',
+      'accessories': 'accessories', 'attachments': 'attachments',
+    };
+    // Child label → the ranges it hangs under, read off the rendered tree. A
+    // material below one range means that material within it — Granite under
+    // Sinks doesn't reach granite attachments. "Stainless steel" appears under
+    // three ranges at once; every filter here is identified by its label, which
+    // cannot tell those nodes apart, so the label covers all of them and only
+    // the first node stays in the tree.
+    var catParent = {};
+    function readSearchSidebar() {
+      if (!isSearch) return; // only the search sidebar carries every option
+      var cats = document.querySelector('form[data-amshopby-filter="category_ids"]');
+      if (cats) cats.querySelectorAll('li[data-label] li[data-label]').forEach(function(li){
+        var parentLi = li.parentElement.closest('li[data-label]');
+        if (!parentLi) return;
+        var label = li.getAttribute('data-label').trim().toLowerCase();
+        (catParent[label] = catParent[label] || []).push(parentLi.getAttribute('data-label').trim().toLowerCase());
+      });
+      // The listing sidebar carries an option per catalogue entry, so a label
+      // that several ranges share ("Copper ll" as a tap colour and as a sink
+      // colour) arrives more than once. Those repeats are one filter here, and
+      // the original's search sidebar lists each label once — so only the first
+      // node of a label stays, and never one with a branch hanging off it.
+      document.querySelectorAll('form[data-amshopby-filter]').forEach(function(form){
+        var seen = {};
+        form.querySelectorAll('li[data-label], div.am-swatch-wrapper').forEach(function(el){
+          var label = getItemLabel(el).toLowerCase();
+          if (!label) return;
+          if (seen[label] && !el.querySelector('li[data-label]')) el.remove();
+          else seen[label] = true;
+        });
+      });
+    }
+
     // Maps data-amshopby-filter attr → { key, type, field }
     // field: the actual property name in the API product object
     var ATTR_MAP = {
-      'category_ids': isSubcatPage
+      // Search results span every range at once, so their Category filter is the
+      // whole tree (range → material, range → product type) rather than the
+      // single branch a listing page shows.
+      'category_ids': isSearch
+        ? { key: 'material', type: 'cat_tree',    field: 'material_categories'  }
+        : isSubcatPage
         ? { key: 'subcat',   type: 'subcat',      field: 'subcategory'          }
         : { key: 'material', type: 'sink_tree',   field: 'material_categories'  },
       'x1':           { key: 'mounting',    type: 'token_match', field: 'mounting_type'       },
@@ -448,7 +502,12 @@ const CLIENT_FILTER_SCRIPT = `
       lenDim: null, wdDim: null, depDim: null,
     };
 
-    var allProducts = [], filteredProducts = [], currentPage = 1, PAGE_SIZE = 36, currentSort = 'name', currentDir = 'asc';
+    // Search opens on Relevance in descending direction — both are the search
+    // toolbar's own defaults upstream, which is why picking Product Name there
+    // lists Z→A. Listing pages open on the catalogue order, ascending.
+    var allProducts = [], filteredProducts = [], currentPage = 1, PAGE_SIZE = 36,
+        currentSort = isSearch ? 'relevance' : 'name',
+        currentDir = isSearch ? 'desc' : 'asc';
 
     // ── Helpers ──────────────────────────────────────────────────────────
     function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -503,6 +562,19 @@ const CLIENT_FILTER_SCRIPT = `
           var lv = val.trim().toLowerCase();
           if (lv === 'sinks') return (p.category||'').toLowerCase() === 'sinks';
           return (p.category||'').toLowerCase() === 'sinks' && getMaterialCats(p).indexOf(norm) !== -1;
+        case 'cat_tree':
+          // Search sidebar: the label is either a range ("Sinks"), a material
+          // below one ("Granite"), or a product type below Accessoires /
+          // Toebehoren ("Pop-up sets"). A child only matches inside its own
+          // range, so Granite under Sinks doesn't pick up granite attachments.
+          var tv = val.trim().toLowerCase();
+          var pcat = (p.category || '').toLowerCase();
+          if (tv === 'product range') return true;
+          if (CAT_RANGE[tv]) return pcat === CAT_RANGE[tv];
+          var parents = (catParent[tv] || []).filter(function(x){ return CAT_RANGE[x]; });
+          if (parents.length && parents.every(function(x){ return CAT_RANGE[x] !== pcat; })) return false;
+          if (getMaterialCats(p).indexOf(normalizeVal({ key: 'material' }, val)) !== -1) return true;
+          return (p.subcategory || '').toLowerCase() === normalizeVal({ key: 'subcat' }, val);
         case 'attach_mat':
           // x143 "Assortiment" = Attachments by material. Reads the strict
           // 'assortiment' field, not material_categories — see normalizeProduct.
@@ -680,6 +752,15 @@ const CLIENT_FILTER_SCRIPT = `
     // rules: _all on the combined page, _desc where a descending rank exists.
     function sortColumn() {
       var all = (baseCat === 'ALL'), desc = (currentDir === 'desc');
+      // Search results are not a catalogue position list, so none of the stored
+      // per-category ranks apply: relevance is the order /api/search returned
+      // (recorded as __rel on load), and the rest sort on their plain column.
+      if (isSearch) {
+        if (currentSort === 'relevance') return '__rel';
+        if (currentSort === 'color') return 'color_order';
+        if (currentSort === 'hideprice_action') return 'hideprice_order';
+        return null; // Product Name → localeCompare
+      }
       if (currentSort === 'color')
         return all ? 'color_order_all' : 'color_order';
       if (currentSort === 'hideprice_action')
@@ -698,6 +779,13 @@ const CLIENT_FILTER_SCRIPT = `
       };
       if (!col) arr.sort(byName);
       else arr.sort(function(a,b){ return rank(a) - rank(b) || byName(a,b); });
+      // Relevance as /api/search returns it IS the descending view — that is the
+      // direction the search page opens in — so only the arrow's other position
+      // turns it around.
+      if (col === '__rel') {
+        if (currentDir === 'asc') arr.reverse();
+        return arr;
+      }
       // Color ignores the direction toggle upstream (asc and desc return the
       // same order), and a _desc column already holds the descending order —
       // reversing in either case is what made these disagree.
@@ -715,9 +803,15 @@ const CLIENT_FILTER_SCRIPT = `
       var pageItems = sorted.slice(start, start + PAGE_SIZE);
       grid.innerHTML = pageItems.length
         ? pageItems.map(productCard).join('')
-        : '<li style="padding:20px;color:#888;list-style:none">Geen producten gevonden.</li>';
+        // An empty search leaves the grid blank and speaks through the notice
+        // SEARCH_SCRIPT puts above the toolbar, the way the original does.
+        : (isSearch ? '' : '<li style="padding:20px;color:#888;list-style:none">Geen producten gevonden.</li>');
       updateToolbar();
       updatePagination();
+      // SEARCH_SCRIPT owns the "no results" notice above the toolbar — it needs
+      // the count from here, since the grid is ours.
+      if (isSearch) document.dispatchEvent(
+        new CustomEvent('rg-search-rendered', { detail: { total: filteredProducts.length } }));
     }
 
     function updateToolbar() {
@@ -1076,13 +1170,36 @@ const CLIENT_FILTER_SCRIPT = `
 
     // ── Fetch products → boot ────────────────────────────────────────────
     // baseCat 'ALL' (the combined /product-range) → no category filter (439 products)
-    var apiUrl = baseCat === 'ALL'
+    function searchApiUrl() {
+      var params = new URLSearchParams(window.location.search);
+      // Advanced Search arrives on its own path carrying field-by-field
+      // criteria instead of a single q.
+      if (window.location.pathname.indexOf('/catalogsearch/advanced') === 0) {
+        var adv = new URLSearchParams();
+        ['name', 'sku', 'short_description'].forEach(function(k){
+          var v = (params.get(k) || '').trim();
+          if (v) adv.set(k, v);
+        });
+        return adv.toString() ? '/api/advanced-search?' + adv.toString() : null;
+      }
+      var q = (params.get('q') || '').trim();
+      return q ? '/api/search?q=' + encodeURIComponent(q) : null;
+    }
+
+    var apiUrl = isSearch
+      ? searchApiUrl()
+      : baseCat === 'ALL'
       ? '/api/products?limit=1000'
       : '/api/products?category=' + encodeURIComponent(baseCat) + '&limit=1000';
-    fetch(apiUrl)
-      .then(function(r){ return r.json(); })
+    // A search with no criteria has nothing to fetch, but the page still needs
+    // its empty grid, toolbar and notice drawn.
+    (apiUrl ? fetch(apiUrl).then(function(r){ return r.json(); }) : Promise.resolve([]))
       .then(function(data){
-        allProducts = data.products || [];
+        allProducts = Array.isArray(data) ? data : (data.products || []);
+        // /api/search hands back its results already in relevance order; keeping
+        // the index is what lets the sorter return to it.
+        allProducts.forEach(function(p, i){ p.__rel = i; });
+        readSearchSidebar();
         // NOTE: filter state is intentionally NOT restored from sessionStorage.
         // The original Reginox site is stateless (each filter is a distinct URL),
         // so a fresh page load must always show ALL products unfiltered. Restoring
@@ -1353,31 +1470,26 @@ const GALLERY_SCRIPT = `
 `;
 
 // ── Search results script ──────────────────────────────────────────────────
-// Injected only on the catalogsearch results page. Reads ?q= from the URL,
-// fetches /api/search, and renders the product grid + title + toolbar, exactly
-// like the original Magento search results page.
+// Injected only on the catalogsearch results page. The grid, toolbar, sidebar
+// and pagination there belong to the client filter engine, same as on every
+// listing page — this only supplies the two things that are specific to a
+// search: the page heading and the "no results" notice.
 const SEARCH_SCRIPT = `
 <script>
 (function(){
   document.addEventListener('DOMContentLoaded', function(){
     var params = new URLSearchParams(window.location.search);
     var q = (params.get('q') || '').trim();
-
     // The same page backs both searches. Advanced Search arrives on
     // /catalogsearch/advanced/result/ carrying name / sku / short_description
     // instead of q, and titles itself differently.
-    var ADV_FIELDS = ['name', 'sku', 'short_description'];
-    var advQuery = new URLSearchParams();
-    ADV_FIELDS.forEach(function(k){
-      var v = (params.get(k) || '').trim();
-      if (v) advQuery.set(k, v);
-    });
     var isAdvanced = window.location.pathname.indexOf('/catalogsearch/advanced') === 0;
 
-    function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
     var heading = isAdvanced ? 'Catalog Advanced Search' : "Search results for: '" + q + "'";
-    document.querySelectorAll('.base[data-ui-id="page-title-wrapper"], .page-title-wrapper .base').forEach(function(el){
+    // The captured query was replaced by a __RGQ__ placeholder in the mirrored
+    // shell — the heading, and the breadcrumb that repeats it, carry the query
+    // actually being served.
+    document.querySelectorAll('.base[data-ui-id="page-title-wrapper"], .page-title-wrapper .base, .breadcrumbs .item.search strong').forEach(function(el){
       el.textContent = heading;
     });
     document.title = isAdvanced ? 'Advanced Search Results' : heading;
@@ -1386,84 +1498,30 @@ const SEARCH_SCRIPT = `
     var si = document.getElementById('search');
     if (si && !isAdvanced) si.value = q;
 
-    var grid = document.querySelector('ol.products.list.items.product-items, ol.product-items');
-
-    function card(p){
-      var href = p.href || ('/product-range/' + p.slug);
-      var uid = p.id || Math.floor(Math.random()*100000);
-      var imgInner = p.image
-        ? '<span class="product-image-wrapper"><img class="product-image-photo" src="' + esc(p.image) + '" loading="eager" width="400" height="400" alt="' + esc(p.name) + '"></span>'
-        : '<span class="product-image-wrapper rg-no-img"></span>';
-      var sizeStyle = '<style>.product-image-container-' + uid + '{width:400px;height:auto;aspect-ratio:400 / 400}.product-image-container-' + uid + ' span.product-image-wrapper{height:100%;width:100%}@supports not (aspect-ratio: auto){.product-image-container-' + uid + ' span.product-image-wrapper{padding-bottom:100%}}</style>';
-      return '<li class="item product product-item">' +
-        '<div class="product-item-info" id="product-item-info_' + uid + '" data-container="product-grid">' +
-          '<a class="product photo product-item-photo" href="' + href + '" tabindex="-1">' +
-            '<span class="product-image-container product-image-container-' + uid + '">' + imgInner + '</span>' + sizeStyle +
-          '</a>' +
-          '<div class="product details product-item-details">' +
-            '<strong class="product name product-item-name"><a class="product-item-link" href="' + href + '">' + esc(p.name) + '</a></strong>' +
-            '<div class="hide_price_text hide_price_text_' + uid + '">Please contact us for price.</div>' +
-          '</div>' +
-        '</div></li>';
-    }
-
-    // Magento's wording: a single page of results reads "N Items", and only a
-    // paginated set reads "Items 1-N of M". Results are rendered in one page
-    // here, so anything up to the page size takes the first form — the origin
-    // shows "13 Items" for a 13-hit search, not "Items 1-13 of 13".
-    function setToolbar(n){
-      var PAGE_SIZE = 36;
-      var text = n === 0 ? 'No items'
-        : (n <= PAGE_SIZE ? n + (n === 1 ? ' Item' : ' Items')
-                          : 'Items 1-' + n + ' of ' + n);
-      document.querySelectorAll('.toolbar-amount').forEach(function(el){
-        el.textContent = text;
+    // Fired by the engine after every render, so the notice follows filtering
+    // as well as the query itself. A search with nothing to show drops its
+    // toolbars and result tabs and speaks through the notice alone, the way the
+    // original does (?q=admiral&cat=4 upstream renders exactly this).
+    document.addEventListener('rg-search-rendered', function(e){
+      var empty = !e.detail.total;
+      document.querySelectorAll('.mst-search__result-tabs, .toolbar.toolbar-products').forEach(function(el){
+        el.style.display = empty ? 'none' : '';
       });
-    }
-
-    var hasCriteria = isAdvanced ? (advQuery.toString().length > 0) : !!q;
-    if (!hasCriteria) { if (grid) grid.innerHTML=''; setToolbar(0); return; }
-
-    // Default search sort = relevance (matches the original). The sorter dropdown
-    // on the search page re-fetches with &sort=.
-    var currentSort = 'relevance';
-
-    function load(){
-      var url = isAdvanced
-        ? '/api/advanced-search?' + advQuery.toString()
-        : '/api/search?q=' + encodeURIComponent(q) +
-          (currentSort && currentSort !== 'relevance' ? '&sort=' + currentSort : '');
-      fetch(url)
-        .then(function(r){ return r.json(); })
-        .then(function(list){
-          list = Array.isArray(list) ? list : [];
-          if (grid) grid.innerHTML = list.length ? list.map(card).join('') : '';
-          setToolbar(list.length);
-          var old = document.querySelector('.rg-no-results');
-          if (old) old.remove();
-          if (!list.length) {
-            var wrap = document.querySelector('.column.main');
-            if (wrap) {
-              var d = document.createElement('div');
-              d.className = 'message notice rg-no-results';
-              d.innerHTML = '<div>Your search returned no results.</div>';
-              var tb = wrap.querySelector('.toolbar.toolbar-products');
-              wrap.insertBefore(d, tb || wrap.firstChild);
-            }
-          }
-        })
-        .catch(function(e){ console.warn('search error', e); });
-    }
-
-    // Wire the sorter dropdown (options: relevance/name/color/hideprice_action)
-    document.querySelectorAll('select[data-role="sorter"], select.sorter-options, #sorter').forEach(function(s){
-      s.value = currentSort;
-      s.addEventListener('change', function(){ currentSort = s.value; load(); });
-      // beat any Magento onchange that would reload the page
-      s.setAttribute('onchange', '');
+      var old = document.querySelector('.rg-no-results');
+      if (old) old.remove();
+      if (!empty) return;
+      var results = document.querySelector('.column.main .search.results');
+      var anchor = results || document.querySelector('.column.main');
+      if (!anchor || !anchor.parentElement) return;
+      var d = document.createElement('div');
+      d.className = 'message notice rg-no-results';
+      d.innerHTML = '<div>Your search returned no results.</div>';
+      // Above the results block, where the original puts it — never as a child
+      // of .column.main, since the toolbar it used to anchor to is nested
+      // deeper and insertBefore threw on it.
+      if (results) anchor.parentElement.insertBefore(d, results);
+      else anchor.insertBefore(d, anchor.firstChild);
     });
-
-    load();
   });
 })();
 </script>
@@ -1801,8 +1859,67 @@ const SEARCH_UI_SCRIPT = `
 </script>
 `;
 
+// ── Search-page shell ──────────────────────────────────────────────────────
+// The attributes the origin filters search results by. The combined
+// /product-range page carries the complete option list for each of them, and
+// the client engine hides every option no result matches — so lifting those
+// four forms across turns the frozen sidebar into one that follows the query.
+const SEARCH_FILTER_ATTRS = ['category_ids', 'x4', 'x26', 'x5'];
+
+function filterFormRe(attr) {
+  return new RegExp('<form[^>]*data-amshopby-filter="' + attr + '"[\\s\\S]*?<\\/form>');
+}
+
+let searchSidebarCache = null;
+function searchSidebarForms() {
+  if (searchSidebarCache) return searchSidebarCache;
+  searchSidebarCache = {};
+  const src = readPage('product-range.html') || '';
+  for (const attr of SEARCH_FILTER_ATTRS) {
+    const m = src.match(filterFormRe(attr));
+    // Options are filtered in place and never followed, so the listing-page
+    // hrefs they arrive with are neutralised — a click that somehow escapes the
+    // engine's handlers then does nothing instead of navigating away.
+    if (m) searchSidebarCache[attr] = m[0].replace(/\shref="[^"]*"/g, ' href="#"');
+  }
+  return searchSidebarCache;
+}
+
+// Empty pagination block, shaped like the one the origin renders on a search
+// that runs past one page. The engine fills .pages-items.
+const SEARCH_PAGES_BLOCK =
+  '<div class="pages">' +
+  '<strong class="label pages-label" id="paging-label">Page</strong>' +
+  '<ul class="items pages-items" aria-labelledby="paging-label"></ul>' +
+  '</div>';
+
+function prepareSearchShell(html) {
+  const forms = searchSidebarForms();
+  for (const attr of Object.keys(forms)) {
+    html = html.replace(filterFormRe(attr), () => forms[attr]);
+  }
+  if (!html.includes('class="pages"')) {
+    html = html.replace('<div class="field limiter">', () => SEARCH_PAGES_BLOCK + '<div class="field limiter">');
+  }
+  // Mirasvit's second result tab ("Information (2)") is frozen the same way:
+  // its count and its link belong to the captured query, and there is no
+  // content-search view behind it here. The Products tab is left as it is.
+  html = html.replace(
+    /<li role="tab" aria-selected="false">[\s\S]*?<\/li>/,
+    ''
+  );
+  return html;
+}
+
 // ── HTML processing ────────────────────────────────────────────────────────
 function processHtml(html, pageName) {
+  // One mirrored shell serves every search, and it was captured mid-query: its
+  // sidebar options are the ones that query happened to produce, and it has no
+  // pagination because those results fitted on a single page. Both are made
+  // query-neutral before any of the rewrites below run, so the injected markup
+  // gets the same treatment as the rest of the page.
+  if (pageName === 'catalogsearch_result.html') html = prepareSearchShell(html);
+
   // Fix asset paths
   html = html.replace(/(['"])\.\.\/(assets\/)/g, '$1/$2');
   html = html.replace(/url\(\.\.\/(assets\/)/g, 'url(/$1');
@@ -2396,19 +2513,24 @@ app.get("/checkout/cart", (req, res) => res.redirect("/"));
 // variant. Removed — those pages are rendered from the database now, so
 // nothing about the running site depends on reginox.com being reachable.)
 
-// Search results: the mirrored shell, with SEARCH_SCRIPT rebuilding the grid
-// from /api/search. This used to live-proxy the origin's result page per
-// query. Free-text queries are unbounded, so unlike the listing pages they
+// Search results: the mirrored shell, with the client filter engine building
+// the grid from /api/search. This used to live-proxy the origin's result page
+// per query. Free-text queries are unbounded, so unlike the listing pages they
 // could never be mirrored up front — and a proxied result reflects the
 // origin's catalog, so a product removed here would still have shown up.
-app.get(["/catalogsearch/result", "/catalogsearch/result/"], (req, res) => {
+// Magento's own canonical form of these URLs carries the controller action
+// (/result/index/); links inside the mirrored markup use it, so it is served
+// too rather than left to 404.
+app.get(["/catalogsearch/result", "/catalogsearch/result/",
+         "/catalogsearch/result/index", "/catalogsearch/result/index/"], (req, res) => {
   serveFirst(res, "catalogsearch_result.html");
 });
 // Advanced Search results. The mirrored form (catalogsearch_advanced.html)
 // submits here, but nothing served this path, so it fell through to a 404.
-// Same result shell as above — SEARCH_SCRIPT notices the /advanced path and
+// Same result shell as above — the engine notices the /advanced path and
 // queries /api/advanced-search with the form's fields instead of ?q=.
-app.get(["/catalogsearch/advanced/result", "/catalogsearch/advanced/result/"], (req, res) => {
+app.get(["/catalogsearch/advanced/result", "/catalogsearch/advanced/result/",
+         "/catalogsearch/advanced/result/index", "/catalogsearch/advanced/result/index/"], (req, res) => {
   serveFirst(res, "catalogsearch_result.html");
 });
 app.get("/installation", (req, res) => servePage("installation.html", res) || res.redirect("/service"));
