@@ -2095,12 +2095,14 @@ function processHtml(html, pageName) {
   // Site name in the browser tab.
   html = html.replace(/Reginox International/g, 'Reginox Asia Pacific');
 
-  // Region switcher flag. The theme's flags are PNGs under /assets; there is
-  // no Singapore one to point at, so the current-region icon becomes the flag
-  // emoji, which every current platform renders.
+  // Region switcher flag. Matched on the surrounding <span class="flag">
+  // rather than the filename: pages do not agree on what the icon is called —
+  // some reference /assets/com.png, others a content-hashed name like
+  // /assets/2a331ae98717.png — so keying on the name left the old flag
+  // standing on every page that used the hashed form.
   html = html.replace(
-    /<img[^>]*src="\/assets\/com\.png"[^>]*>/g,
-    '<img src="/assets/sg-flag.svg" width="24" height="24" alt="Singapore">'
+    /(<span class="flag">)\s*<img[^>]*>/g,
+    '$1<img src="/assets/sg-flag.svg" width="24" height="24" alt="Singapore">'
   );
 
   // Only the Singapore storefront remains, so the other regions are dropped
