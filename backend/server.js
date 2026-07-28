@@ -2105,6 +2105,11 @@ function processHtml(html, pageName) {
     '$1<img src="/assets/sg-flag.svg" width="24" height="24" alt="Singapore">'
   );
 
+  // Region label beside the flag. Matched on the switcher's own
+  // <span class="name">, so it cannot touch "COM" appearing anywhere else
+  // — inside COMFORT, a .com address, or the storeName in the JS config.
+  html = html.replace(/<span class="name">COM<\/span>/g, '<span class="name">SG</span>');
+
   // Only the Singapore storefront remains, so the other regions are dropped
   // from the switcher entirely rather than left pointing at reginox.de / .nl /
   // .co.uk. Matched on the destination, not the label, since the markup
