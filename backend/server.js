@@ -2105,6 +2105,13 @@ function processHtml(html, pageName) {
     '$1<img src="/assets/sg-flag.svg" width="24" height="24" alt="Singapore">'
   );
 
+  // Map pin moves from the Rijssen head office to the Singapore address
+  // already shown in the footer and on the contact page: 2 Loyang Lane
+  // #03-03. The Amasty map takes its centre from a LatLng call in an
+  // inline script, and the same pair appears on eleven pages.
+  html = html.replace(/LatLng\(\s*52\.3186486\s*,\s*6\.511997\s*\)/g,
+    'LatLng(1.3708995, 103.9710831)');
+
   // Region label beside the flag. Matched on the switcher's own
   // <span class="name">, so it cannot touch "COM" appearing anywhere else
   // — inside COMFORT, a .com address, or the storeName in the JS config.
